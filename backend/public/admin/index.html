@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="robots" content="noindex,nofollow">
+    <title>Bondera Admin</title>
+    <link rel="stylesheet" href="/admin/assets/admin.css">
+  </head>
+  <body>
+    <main id="authView" class="auth-shell">
+      <section class="auth-panel" aria-labelledby="authTitle">
+        <div class="brand-mark" aria-hidden="true">B</div>
+        <p class="brand-name">Bondera</p>
+        <h1 id="authTitle">Admin access</h1>
+
+        <form id="loginForm" method="post" action="/admin" novalidate>
+          <div class="field">
+            <label for="adminEmail">Email</label>
+            <input id="adminEmail" name="email" type="email" autocomplete="username">
+          </div>
+          <div class="field">
+            <label for="adminPassword">Password</label>
+            <input id="adminPassword" name="password" type="password" autocomplete="current-password">
+          </div>
+          <button class="primary-button" type="submit">Continue</button>
+        </form>
+
+        <form id="otpForm" class="hidden" method="post" action="/admin" novalidate>
+          <div class="field">
+            <label for="adminOtp">Verification code</label>
+            <input id="adminOtp" name="otp" type="text" inputmode="numeric" autocomplete="one-time-code">
+          </div>
+          <button class="primary-button" type="submit">Verify</button>
+          <button id="backToLogin" class="text-button" type="button">Back</button>
+        </form>
+
+        <p id="authStatus" class="status-message" role="status" aria-live="polite"></p>
+      </section>
+    </main>
+
+    <div id="dashboardView" class="dashboard hidden">
+      <header class="topbar">
+        <div class="topbar-brand">
+          <span class="brand-mark compact" aria-hidden="true">B</span>
+          <div>
+            <strong>Bondera Admin</strong>
+            <span id="adminIdentity"></span>
+          </div>
+        </div>
+        <button id="logoutButton" class="secondary-button" type="button">Sign out</button>
+      </header>
+
+      <section class="overview-band" aria-label="Overview">
+        <div class="overview-inner">
+          <div class="metric"><span>Users</span><strong id="metricUsers">0</strong></div>
+          <div class="metric"><span>Premium</span><strong id="metricPremium">0 / 3</strong></div>
+          <div class="metric"><span>Rooms</span><strong id="metricRooms">0</strong></div>
+          <div class="metric"><span>Active</span><strong id="metricActiveRooms">0</strong></div>
+          <div class="metric alert"><span>Deleted messages</span><strong id="metricDeleted">0</strong></div>
+        </div>
+      </section>
+
+      <nav class="tabs" role="tablist" aria-label="Admin views">
+        <button class="tab active" type="button" data-view="users" role="tab">Users</button>
+        <button class="tab" type="button" data-view="connections" role="tab">Chat rooms</button>
+        <button class="tab" type="button" data-view="deleted" role="tab">Deleted messages</button>
+        <button class="tab" type="button" data-view="openai" role="tab">OpenAI usage</button>
+        <button class="tab" type="button" data-view="audit" role="tab">Admin audit</button>
+      </nav>
+
+      <section class="workspace">
+        <div id="usersView" class="view-panel">
+          <div class="view-heading">
+            <div>
+              <h2>Users</h2>
+              <p id="usersCount">0 records</p>
+            </div>
+            <form id="userSearchForm" class="search-form" method="get" action="/admin" novalidate>
+              <label class="sr-only" for="userSearch">Search users</label>
+              <input id="userSearch" name="search" type="search" placeholder="Email, username, or user ID">
+              <button class="secondary-button" type="submit">Search</button>
+            </form>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>User identity</th><th>Bondera ID</th><th>Auth</th><th>Status</th><th>Joined</th><th>Premium</th></tr></thead>
+              <tbody id="usersTable"></tbody>
+            </table>
+          </div>
+          <div id="usersPagination" class="pagination"></div>
+        </div>
+
+        <div id="connectionsView" class="view-panel hidden">
+          <div class="view-heading"><div><h2>Chat rooms</h2><p id="connectionsCount">0 records</p></div></div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Participants</th><th>Status</th><th>Categories</th><th>Requested</th><th>Last message</th></tr></thead>
+              <tbody id="connectionsTable"></tbody>
+            </table>
+          </div>
+          <div id="connectionsPagination" class="pagination"></div>
+        </div>
+
+        <div id="deletedView" class="view-panel hidden">
+          <div class="view-heading"><div><h2>Deleted messages</h2><p id="deletedCount">0 records</p></div></div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Conversation</th><th>Original content</th><th>Media</th><th>Sent</th><th>Deleted</th><th>Cloud cleanup</th></tr></thead>
+              <tbody id="deletedTable"></tbody>
+            </table>
+          </div>
+          <div id="deletedPagination" class="pagination"></div>
+        </div>
+
+        <div id="openaiView" class="view-panel hidden">
+          <div class="view-heading">
+            <div>
+              <h2>OpenAI usage</h2>
+              <p id="openAiStatus">Costs are tracked from Bondera Private AI requests.</p>
+            </div>
+            <button id="refreshOpenAiUsage" class="secondary-button" type="button">Refresh</button>
+          </div>
+          <div class="usage-layout">
+            <div class="usage-summary">
+              <div class="usage-card"><span>Balance</span><strong id="openAiBalance">Unavailable</strong><p id="openAiBalanceNote">Usage is tracked locally.</p></div>
+              <div class="usage-card"><span>Today</span><strong id="openAiToday">₹0</strong><p id="openAiTodayMeta">0 requests</p></div>
+              <div class="usage-card"><span>Last 7 days</span><strong id="openAiWeek">₹0</strong><p id="openAiWeekMeta">0 requests</p></div>
+              <div class="usage-card"><span>Last 30 days</span><strong id="openAiMonth">₹0</strong><p id="openAiMonthMeta">0 requests</p></div>
+            </div>
+            <div class="chart-panel">
+              <div class="chart-heading">
+                <h3>Daily spend</h3>
+                <span id="openAiModel">Model</span>
+              </div>
+              <div id="openAiDailyChart" class="bar-chart" aria-label="Daily OpenAI spend chart"></div>
+            </div>
+            <div class="chart-panel">
+              <div class="chart-heading">
+                <h3>Weekly spend</h3>
+                <span id="openAiRate">INR estimate</span>
+              </div>
+              <div id="openAiWeeklyChart" class="bar-chart compact" aria-label="Weekly OpenAI spend chart"></div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Date</th><th>Spend</th><th>Requests</th><th>Input tokens</th><th>Output tokens</th><th>Cached input</th></tr></thead>
+                <tbody id="openAiUsageTable"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <div id="auditView" class="view-panel hidden">
+          <div class="view-heading"><div><h2>Admin audit</h2><p id="auditCount">0 records</p></div></div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Action</th><th>Target</th><th>Actor</th><th>IP address</th><th>Time</th></tr></thead>
+              <tbody id="auditTable"></tbody>
+            </table>
+          </div>
+          <div id="auditPagination" class="pagination"></div>
+        </div>
+      </section>
+
+      <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+    </div>
+
+    <script src="/admin/vendor/jquery.min.js"></script>
+    <script src="/admin/vendor/jquery.validate.min.js"></script>
+    <script src="/admin/assets/admin.js"></script>
+  </body>
+</html>
