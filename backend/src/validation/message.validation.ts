@@ -38,7 +38,10 @@ export const messageHistoryParamsSchema = z.object({
 
 export const messageHistoryQuerySchema = z.object({
   before: z.string().datetime({ offset: true }).optional(),
+  after: z.string().datetime({ offset: true }).optional(),
   limit: z.coerce.number().int().min(1).max(100).default(30)
+}).refine((query) => !(query.before && query.after), {
+  message: "Use either before or after, not both."
 });
 
 export type ChatMediaMessageInput = z.infer<typeof chatMediaMessageSchema>;

@@ -7,6 +7,8 @@ export interface User {
   email: string;
   username: string;
   fullName?: string;
+  birthDate?: string;
+  timeZone?: string;
   uniqueId: string;
   profilePicture?: ProfilePicture;
   bio?: string;
@@ -20,6 +22,22 @@ export interface AuthTokens {
 }
 
 export interface Session { user: User; tokens: AuthTokens }
+
+export type PremiumRequestStatus = "pending" | "approved" | "rejected" | "revoked";
+
+export interface PremiumRequestState {
+  status: PremiumRequestStatus;
+  requestedAt: string;
+  decidedAt?: string;
+  adminNote?: string;
+}
+
+export interface PremiumRequestSummary {
+  isPremium: boolean;
+  request: PremiumRequestState | null;
+  premiumCount: number;
+  premiumLimit: number;
+}
 
 export interface PublicUser {
   id: string;
@@ -58,6 +76,19 @@ export interface MessageMedia {
 }
 
 export interface MessageReaction { userId: string; emoji: string; reactedAt: string }
+export interface ReactionNotification {
+  connectionId: string;
+  messageId: string;
+  reactorId: string;
+  reactorName: string;
+  emoji: string;
+  messagePreview: string;
+}
+export interface ReactionEvent {
+  messageId: string;
+  reactions: MessageReaction[];
+  notification?: ReactionNotification;
+}
 export interface MessageReceipt { userId: string; deliveredAt?: string; seenAt?: string }
 
 export interface ChatMessage {
@@ -87,6 +118,24 @@ export interface PrivateAiReply {
     historyTruncated: boolean;
     generatedAt: string;
   };
+  conversation: AiConversation;
+}
+
+export interface AiTurn {
+  id: string;
+  question: string;
+  answer: string;
+  textMessagesAnalyzed: number;
+  historyTruncated: boolean;
+  createdAt?: string;
+}
+
+export interface AiConversation {
+  id: string;
+  title: string;
+  turns: AiTurn[];
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface ApiEnvelope<T> { success: true; message?: string; data: T }

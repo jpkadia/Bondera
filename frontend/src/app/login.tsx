@@ -1,13 +1,19 @@
 import { router } from "expo-router";
-import { AtSign, Eye, EyeOff, LockKeyhole, MessageCircleMore } from "lucide-react-native";
+import { AtSign, Eye, EyeOff, LockKeyhole } from "lucide-react-native";
 import { useCallback, useEffect, useState } from "react";
 import { ActivityIndicator, KeyboardAvoidingView, Platform, Pressable } from "react-native";
 import { styled } from "styled-components/native";
 
 import { DEMO_MODE } from "@/config";
+import { BrandSymbol } from "@/components/BrandLogo";
 import { GoogleAuthButton } from "@/components/GoogleAuthButton";
+import type { GoogleCredential } from "@/components/GoogleAuthButton.types";
 import { useAuth } from "@/context/AuthContext";
 import { ApiError } from "@/services/api";
+import {
+  validateLoginValues,
+  type LoginErrors,
+} from "@/services/auth-validation";
 import { colors } from "@/theme";
 
 const Screen = styled.SafeAreaView`
@@ -36,15 +42,6 @@ const BrandRow = styled.View`
 
 const BrandCopy = styled.View`
   flex: 1;
-`;
-
-const BrandMark = styled.View`
-  width: 48px;
-  height: 48px;
-  align-items: center;
-  justify-content: center;
-  border-radius: 8px;
-  background-color: ${colors.brand};
 `;
 
 const Brand = styled.Text`
@@ -87,14 +84,15 @@ const Label = styled.Text`
   font-weight: 700;
 `;
 
-const Field = styled.View<{ $focused: boolean }>`
+const Field = styled.View<{ $focused: boolean; $invalid?: boolean }>`
   min-height: 50px;
   flex-direction: row;
   align-items: center;
   gap: 10px;
   padding: 0 13px;
   border-width: 1px;
-  border-color: ${({ $focused }) => $focused ? colors.brand : colors.border};
+  border-color: ${({ $focused, $invalid }) =>
+    $invalid ? colors.coral : $focused ? colors.brand : colors.border};
   border-radius: 8px;
   background-color: ${colors.surface};
 `;
@@ -135,6 +133,12 @@ const ButtonText = styled.Text<{ $muted?: boolean }>`
   font-weight: 800;
 `;
 
+const ForgotPasswordText = styled.Text`
+  color: ${colors.brand};
+  font-size: 13px;
+  font-weight: 800;
+`;
+
 export default function LoginScreen() {
   const { user, login, loginWithGoogle, enterDemo } = useAuth();
   const [identifier, setIdentifier] = useState("");
@@ -142,18 +146,21 @@ export default function LoginScreen() {
   const [showPassword, setShowPassword] = useState(false);
   const [focused, setFocused] = useState<"identifier" | "password" | null>(null);
   const [error, setError] = useState("");
+  const [fieldErrors, setFieldErrors] = useState<LoginErrors>({});
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    if (user) router.replace("/home");
+    if (user) {
+      router.replace(user.birthDate ? "/home" : "/complete-birthdate");
+    }
   }, [user]);
 
-  const submitGoogle = useCallback(async (idToken: string) => {
+  const submitGoogle = useCallback(async (credential: GoogleCredential) => {
     if (busy) return;
     setBusy(true);
     setError("");
     try {
-      await loginWithGoogle(idToken);
+      await loginWithGoogle(credential);
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.message : "Google Sign-In failed. Try again.");
     } finally {
@@ -163,16 +170,16 @@ export default function LoginScreen() {
 
   if (user) return null;
 
+  const validateField = (field: keyof LoginErrors) => {
+    const next = validateLoginValues({ identifier, password });
+    setFieldErrors((current) => ({ ...current, [field]: next[field] }));
+  };
+
   const submit = async () => {
     if (busy) return;
-    if (identifier.trim().replace(/^@/, "").length < 3) {
-      setError("Enter your email address or username.");
-      return;
-    }
-    if (!password) {
-      setError("Enter your password.");
-      return;
-    }
+    const validationErrors = validateLoginValues({ identifier, password });
+    setFieldErrors(validationErrors);
+    if (Object.keys(validationErrors).length > 0) return;
     setBusy(true);
     setError("");
     try {
@@ -193,7 +200,7 @@ export default function LoginScreen() {
       <Shell behavior={Platform.OS === "ios" ? "padding" : undefined}>
         <Panel>
           <BrandRow>
-            <BrandMark><MessageCircleMore size={27} color={colors.white} /></BrandMark>
+            <BrandSymbol size={48} />
             <BrandCopy>
               <Brand>Bondera</Brand>
               <Eyebrow>Your private circles</Eyebrow>
@@ -203,7 +210,10 @@ export default function LoginScreen() {
             <Title>Welcome back</Title>
             <Subtitle>Sign in to continue to your private circles.</Subtitle>
             <Label>Email or username</Label>
-            <Field $focused={focused === "identifier"}>
+            <Field
+              $focused={focused === "identifier"}
+              $invalid={Boolean(fieldErrors.identifier)}
+            >
               <AtSign size={19} color={colors.inkMuted} />
               <Input
                 accessibilityLabel="Email or username"
@@ -215,16 +225,25 @@ export default function LoginScreen() {
                 value={identifier}
                 onChangeText={(value) => {
                   setIdentifier(value);
+                  if (fieldErrors.identifier) {
+                    setFieldErrors((current) => ({ ...current, identifier: undefined }));
+                  }
                   if (error) setError("");
                 }}
                 onFocus={() => setFocused("identifier")}
-                onBlur={() => setFocused(null)}
+                onBlur={() => { setFocused(null); validateField("identifier"); }}
                 placeholder="Email or username"
                 placeholderTextColor={colors.inkMuted}
               />
             </Field>
+            {fieldErrors.identifier ? (
+              <ErrorText accessibilityRole="alert">{fieldErrors.identifier}</ErrorText>
+            ) : null}
             <Label>Password</Label>
-            <Field $focused={focused === "password"}>
+            <Field
+              $focused={focused === "password"}
+              $invalid={Boolean(fieldErrors.password)}
+            >
               <LockKeyhole size={19} color={colors.inkMuted} />
               <Input
                 accessibilityLabel="Password"
@@ -235,10 +254,13 @@ export default function LoginScreen() {
                 value={password}
                 onChangeText={(value) => {
                   setPassword(value);
+                  if (fieldErrors.password) {
+                    setFieldErrors((current) => ({ ...current, password: undefined }));
+                  }
                   if (error) setError("");
                 }}
                 onFocus={() => setFocused("password")}
-                onBlur={() => setFocused(null)}
+                onBlur={() => { setFocused(null); validateField("password"); }}
                 placeholder="Password"
                 placeholderTextColor={colors.inkMuted}
                 onSubmitEditing={submit}
@@ -247,6 +269,17 @@ export default function LoginScreen() {
                 {showPassword ? <EyeOff size={19} color={colors.inkMuted} /> : <Eye size={19} color={colors.inkMuted} />}
               </Pressable>
             </Field>
+            {fieldErrors.password ? (
+              <ErrorText accessibilityRole="alert">{fieldErrors.password}</ErrorText>
+            ) : null}
+            <Pressable
+              accessibilityRole="link"
+              disabled={busy}
+              onPress={() => router.push("/forgot-password")}
+              style={{ alignSelf: "flex-end", paddingVertical: 3 }}
+            >
+              <ForgotPasswordText>Forgot password?</ForgotPasswordText>
+            </Pressable>
             {error ? <ErrorText accessibilityRole="alert">{error}</ErrorText> : null}
             <Pressable
               accessibilityRole="button"

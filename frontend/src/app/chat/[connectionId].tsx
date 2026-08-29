@@ -1,8 +1,25 @@
 import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
-import { Redirect, router, useLocalSearchParams } from "expo-router";
+import {
+  Redirect,
+  router,
+  useFocusEffect,
+  useIsFocused,
+  useLocalSearchParams,
+} from "expo-router";
+import {
+  FlashList,
+  type FlashListRef,
+  type ViewToken,
+  useMappingHelper,
+} from "@shopify/flash-list";
+import {
+  EmojiPicker,
+  type EmojiSelection,
+} from "rn-expo-emoji-picker";
 import {
   ArrowLeft,
+  ChevronDown,
   Edit3,
   ImagePlus,
   MoreVertical,
@@ -15,13 +32,16 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
-  FlatList,
+  AppState,
+  Keyboard,
   KeyboardAvoidingView,
   Modal,
   Platform,
   Pressable,
+  TextInput as NativeTextInput,
   useWindowDimensions,
 } from "react-native";
+import type { NativeScrollEvent, NativeSyntheticEvent } from "react-native";
 import { styled } from "styled-components/native";
 
 import { Avatar } from "@/components/Avatar";
@@ -29,15 +49,40 @@ import { IconButton } from "@/components/IconButton";
 import { Notice } from "@/components/Notice";
 import { WhatsAppMediaCard } from "@/components/WhatsAppMediaCard";
 import { useAuth } from "@/context/AuthContext";
+import { useNotification } from "@/context/NotificationContext";
 import { demoMessages } from "@/data/demo";
 import { api } from "@/services/api";
+import {
+  clampComposerInputHeight,
+  insertTextAtSelection,
+} from "@/services/chat-composer";
+import {
+  canAcknowledgeSeen,
+  findFirstUnreadIndex,
+  latestSeenAt,
+  latestViewableUnreadMessage,
+} from "@/services/read-state";
+import { shouldShowMessageAction } from "@/services/message-actions";
 import { RealtimeClient } from "@/services/socket";
 import { colors } from "@/theme";
 import type { ChatMessage, Connection, MessageReaction, PublicUser } from "@/types/api";
-import { displayName, messageTime } from "@/utils/format";
+import {
+  chatDateLabel,
+  displayName,
+  isSameCalendarDay,
+  messageTime,
+  seenReceiptLabel,
+} from "@/utils/format";
 
 const MAX_FILES = 3;
 const MAX_FILE_BYTES = 5 * 1024 * 1024;
+const BOTTOM_FOLLOW_THRESHOLD_PX = 96;
+const MESSAGE_VIEWABILITY_CONFIG = {
+  minimumViewTime: 400,
+  itemVisiblePercentThreshold: 60,
+};
+const MIN_COMPOSER_INPUT_HEIGHT = 34;
+const MAX_COMPOSER_INPUT_HEIGHT = 104;
 const REACTIONS = ["❤", "👍", "😂", "😮", "😢", "🙏"];
 
 interface SelectedFile {
@@ -93,17 +138,54 @@ const Presence = styled.Text`
 
 const Messages = styled.View`
   flex: 1;
+  position: relative;
   background-color: ${colors.canvas};
 `;
 
-const MessageRow = styled.View<{ $mine: boolean }>`
+const NewMessagesButton = styled(Pressable)`
+  position: absolute;
+  right: 16px;
+  bottom: 14px;
+  z-index: 5;
+  min-height: 40px;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 8px 13px;
+  border-width: 1px;
+  border-color: ${colors.border};
+  border-radius: 20px;
+  background-color: ${colors.surface};
+  shadow-color: #000;
+  shadow-offset: 0px 3px;
+  shadow-opacity: 0.14;
+  shadow-radius: 6px;
+  elevation: 5;
+`;
+
+const NewMessagesText = styled.Text`
+  color: ${colors.brandDark};
+  font-size: 12px;
+  font-weight: 800;
+`;
+
+const MessageRow = styled.View<{ $mine: boolean; $hasReaction: boolean }>`
   width: 100%;
   align-items: ${({ $mine }) => ($mine ? "flex-end" : "flex-start")};
-  padding: 3px 14px;
+  padding: ${({ $hasReaction }) =>
+    $hasReaction ? "3px 14px 15px" : "3px 14px"};
+`;
+
+const MessageBubbleShell = styled.View`
+  position: relative;
+  max-width: 78%;
+  min-width: 72px;
 `;
 
 const Bubble = styled(Pressable)<{ $mine: boolean; $deleted: boolean }>`
-  max-width: 78%;
+  position: relative;
+  max-width: 100%;
   min-width: 72px;
   gap: 7px;
   padding: ${({ $deleted }) => ($deleted ? "10px 12px" : "9px 11px 7px")};
@@ -113,6 +195,24 @@ const Bubble = styled(Pressable)<{ $mine: boolean; $deleted: boolean }>`
   background-color: ${({ $mine, $deleted }) =>
     $deleted ? colors.surfaceMuted : $mine ? colors.brand : colors.surface};
   opacity: ${({ $deleted }) => ($deleted ? 0.78 : 1)};
+`;
+
+const MessageActionTrigger = styled(Pressable)<{ $mine: boolean }>`
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  z-index: 4;
+  width: 28px;
+  height: 26px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 7px;
+  background-color: ${({ $mine }) =>
+    $mine ? "rgba(0, 0, 0, 0.2)" : colors.surfaceMuted};
+  shadow-color: #000;
+  shadow-offset: 0px 1px;
+  shadow-opacity: 0.12;
+  shadow-radius: 2px;
 `;
 
 const MessageText = styled.Text<{ $mine: boolean; $deleted?: boolean }>`
@@ -140,8 +240,8 @@ const Time = styled.Text<{ $mine: boolean }>`
   font-size: 10px;
 `;
 
-const SeenLabel = styled.Text`
-  margin-top: 2px;
+const SeenLabel = styled.Text<{ $hasReaction: boolean }>`
+  margin-top: ${({ $hasReaction }) => ($hasReaction ? 14 : 2)}px;
   margin-right: 14px;
   color: ${colors.inkMuted};
   font-size: 11px;
@@ -167,12 +267,43 @@ const ReactionText = styled.Text`
   font-size: 13px;
 `;
 
-const DateMarker = styled.Text`
+const DateMarker = styled.View`
   align-self: center;
   margin: 10px 0;
+  padding: 5px 10px;
+  border-width: 1px;
+  border-color: ${colors.border};
+  border-radius: 12px;
+  background-color: ${colors.surface};
+`;
+
+const DateMarkerText = styled.Text`
   color: ${colors.inkMuted};
   font-size: 11px;
   font-weight: 700;
+`;
+
+const UnreadDivider = styled.View`
+  width: 100%;
+  flex-direction: row;
+  align-items: center;
+  gap: 9px;
+  padding: 10px 14px 7px;
+`;
+
+const UnreadDividerLine = styled.View`
+  flex: 1;
+  height: 1px;
+  background-color: ${colors.brand};
+  opacity: 0.38;
+`;
+
+const UnreadDividerLabel = styled.Text`
+  color: ${colors.brandDark};
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
 `;
 
 const ComposerArea = styled.View`
@@ -208,11 +339,11 @@ const FileChipText = styled.Text.attrs({ numberOfLines: 1 })`
 `;
 
 const Composer = styled.View<{ $focused: boolean }>`
-  min-height: 50px;
+  min-height: 44px;
   flex-direction: row;
   align-items: flex-end;
   gap: 4px;
-  padding: 4px;
+  padding: 2px 4px;
   border-width: 1px;
   border-color: ${({ $focused }) => ($focused ? colors.brand : colors.border)};
   border-radius: 8px;
@@ -222,8 +353,7 @@ const Composer = styled.View<{ $focused: boolean }>`
 const Input = styled.TextInput`
   flex: 1;
   min-width: 0;
-  max-height: 116px;
-  padding: 9px 8px;
+  padding: 7px 8px;
   color: ${colors.ink};
   font-size: 15px;
   line-height: 20px;
@@ -339,6 +469,31 @@ const ActionButtonText = styled.Text`
   font-weight: 800;
 `;
 
+const EmojiPanel = styled.View`
+  width: 100%;
+  overflow: hidden;
+  border-width: 1px;
+  border-color: ${colors.border};
+  border-radius: 12px;
+  background-color: ${colors.surface};
+`;
+
+const EmojiPanelHeader = styled.View`
+  min-height: 48px;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 8px 4px 16px;
+  border-bottom-width: 1px;
+  border-bottom-color: ${colors.border};
+`;
+
+const EmojiPanelTitle = styled.Text`
+  color: ${colors.ink};
+  font-size: 15px;
+  font-weight: 800;
+`;
+
 function mergeMessage(items: ChatMessage[], next: ChatMessage) {
   const index = items.findIndex(
     (item) =>
@@ -353,30 +508,68 @@ function mergeMessage(items: ChatMessage[], next: ChatMessage) {
 
 export default function ChatScreen() {
   const params = useLocalSearchParams<Record<string, string>>();
-  const { width } = useWindowDimensions();
+  const { height, width } = useWindowDimensions();
   const { user, accessToken, isDemo } = useAuth();
-  const listRef = useRef<FlatList<ChatMessage>>(null);
+  const isRouteFocused = useIsFocused();
+  const {
+    clearActiveConnection,
+    setActiveConnection,
+  } = useNotification();
+  const listRef = useRef<FlashListRef<ChatMessage>>(null);
+  const inputRef = useRef<NativeTextInput>(null);
+  const inputSelection = useRef({ start: 0, end: 0 });
+  const { getMappingKey } = useMappingHelper();
   const [realtime] = useState(() => new RealtimeClient());
   const typingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const initialScrollDone = useRef(false);
-  const firstUnreadMessageId = useRef<string | null>(null);
+  const isNearBottom = useRef(true);
+  const pendingBottomScroll = useRef<boolean | null>(null);
+  const viewableMessageIds = useRef<Set<string>>(new Set());
+  const seenInFlightMessageId = useRef<string | null>(null);
+  const acknowledgedSeenMessageId = useRef<string | null>(null);
+  const acknowledgeSeenRef = useRef<() => void>(() => undefined);
+  const loadingNewerMessages = useRef(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [resolvedConnection, setResolvedConnection] = useState<Connection | null>(
+    null,
+  );
   const [text, setText] = useState("");
+  const [inputHeight, setInputHeight] = useState(MIN_COMPOSER_INPUT_HEIGHT);
+  const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
   const [files, setFiles] = useState<SelectedFile[]>([]);
   const [focused, setFocused] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const [loadedConnectionId, setLoadedConnectionId] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const [typing, setTyping] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [selected, setSelected] = useState<ChatMessage | null>(null);
   const [editing, setEditing] = useState<ChatMessage | null>(null);
+  const [newMessageCount, setNewMessageCount] = useState(0);
+  const [hoveredMessageId, setHoveredMessageId] = useState<string | null>(null);
+  const [firstUnreadMessageId, setFirstUnreadMessageId] = useState<string | null>(
+    null,
+  );
+  const [nextAfterCursor, setNextAfterCursor] = useState<string | null>(null);
+  const [appIsActive, setAppIsActive] = useState(
+    AppState.currentState === "active",
+  );
+  const [documentIsVisible, setDocumentIsVisible] = useState(
+    Platform.OS !== "web" ||
+      typeof document === "undefined" ||
+      document.visibilityState === "visible",
+  );
+  const loading = loadedConnectionId !== params.connectionId;
+  const firstUnreadIndex = useMemo(
+    () => findFirstUnreadIndex(messages, firstUnreadMessageId),
+    [firstUnreadMessageId, messages],
+  );
 
-  const otherUser = useMemo<PublicUser>(
+  const routeOtherUser = useMemo<PublicUser>(
     () => ({
-      id: params.userId,
-      username: params.username,
+      id: params.userId || "",
+      username: params.username || "User",
       fullName: params.fullName || undefined,
-      uniqueId: params.uniqueId,
+      uniqueId: params.uniqueId || "",
       profilePicture: params.profilePicture
         ? { url: params.profilePicture }
         : undefined,
@@ -390,6 +583,11 @@ export default function ChatScreen() {
     ],
   );
 
+  const otherUser =
+    resolvedConnection?.id === params.connectionId
+      ? resolvedConnection.otherUser
+      : routeOtherUser;
+
   const demoConnection = useMemo<Connection>(
     () => ({
       id: params.connectionId,
@@ -401,16 +599,72 @@ export default function ChatScreen() {
       awaitingOtherCategory: false,
       requestedAt: new Date().toISOString(),
       unreadCount: 0,
-      otherUser,
+      otherUser: routeOtherUser,
     }),
-    [otherUser, params.category, params.connectionId],
+    [params.category, params.connectionId, routeOtherUser],
   );
 
   const scrollToBottom = useCallback((animated = true) => {
-    setTimeout(() => {
+    pendingBottomScroll.current = null;
+    isNearBottom.current = true;
+    setNewMessageCount(0);
+    requestAnimationFrame(() => {
       listRef.current?.scrollToEnd({ animated });
-    }, 60);
+    });
   }, []);
+
+  const followNextMessage = useCallback((animated = true) => {
+    pendingBottomScroll.current = animated;
+  }, []);
+
+  const handleContentSizeChange = useCallback(() => {
+    const animated = pendingBottomScroll.current;
+
+    if (animated === null) return;
+
+    pendingBottomScroll.current = null;
+    isNearBottom.current = true;
+    setNewMessageCount(0);
+    requestAnimationFrame(() => {
+      listRef.current?.scrollToEnd({ animated });
+    });
+  }, []);
+
+  const handleScroll = useCallback(
+    (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+      const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+      const distanceFromBottom = Math.max(
+        contentSize.height - layoutMeasurement.height - contentOffset.y,
+        0,
+      );
+      const nextIsNearBottom = distanceFromBottom <= BOTTOM_FOLLOW_THRESHOLD_PX;
+
+      isNearBottom.current = nextIsNearBottom;
+      if (nextIsNearBottom) setNewMessageCount(0);
+    },
+    [],
+  );
+
+  const handleInitialListLoad = useCallback(() => {
+    if (initialScrollDone.current) return;
+
+    initialScrollDone.current = true;
+    if (firstUnreadIndex >= 0) {
+      isNearBottom.current = false;
+      return;
+    }
+
+    scrollToBottom(false);
+  }, [firstUnreadIndex, scrollToBottom]);
+
+  const maintainChatPosition = useMemo(
+    () => ({
+      autoscrollToBottomThreshold: 0.2,
+      animateAutoScrollToBottom: true,
+      startRenderingFromBottom: firstUnreadIndex < 0,
+    }),
+    [firstUnreadIndex],
+  );
 
   const updateReceipts = useCallback(
     (ids: string[], field: "deliveredAt" | "seenAt", value: string) => {
@@ -434,46 +688,203 @@ export default function ChatScreen() {
     [],
   );
 
-  // Determine last seen message sent by current user for Instagram-style "Seen" indicator
-  const lastSeenMessageId = useMemo(() => {
-    const seenSentMessages = messages.filter(
-      (m) =>
-        m.senderId === user?.id &&
-        !m.isDeleted &&
-        m.receipts.some((r) => Boolean(r.seenAt)),
+  useFocusEffect(
+    useCallback(() => {
+      setActiveConnection(params.connectionId);
+      return () => clearActiveConnection(params.connectionId);
+    }, [clearActiveConnection, params.connectionId, setActiveConnection]),
+  );
+
+  useEffect(() => {
+    const appStateSubscription = AppState.addEventListener("change", (state) => {
+      setAppIsActive(state === "active");
+    });
+    const handleDocumentVisibility = () => {
+      setDocumentIsVisible(document.visibilityState === "visible");
+    };
+
+    if (Platform.OS === "web" && typeof document !== "undefined") {
+      document.addEventListener("visibilitychange", handleDocumentVisibility);
+    }
+
+    return () => {
+      appStateSubscription.remove();
+      if (Platform.OS === "web" && typeof document !== "undefined") {
+        document.removeEventListener("visibilitychange", handleDocumentVisibility);
+      }
+    };
+  }, []);
+
+  const acknowledgeLatestViewableMessage = useCallback(() => {
+    if (
+      isDemo ||
+      !canAcknowledgeSeen({
+        isRouteFocused,
+        isAppActive: appIsActive,
+        isDocumentVisible: documentIsVisible,
+      })
+    ) {
+      return;
+    }
+
+    const candidate = latestViewableUnreadMessage(
+      messages,
+      viewableMessageIds.current,
+      otherUser.id,
     );
-    return seenSentMessages[seenSentMessages.length - 1]?.id ?? null;
+    if (
+      !candidate ||
+      seenInFlightMessageId.current === candidate.id ||
+      acknowledgedSeenMessageId.current === candidate.id
+    ) {
+      return;
+    }
+
+    seenInFlightMessageId.current = candidate.id;
+    void realtime
+      .markSeen(candidate.id)
+      .then(({ messageIds, seenAt }) => {
+        acknowledgedSeenMessageId.current = candidate.id;
+        if (seenAt) updateReceipts(messageIds, "seenAt", seenAt);
+        requestAnimationFrame(() => acknowledgeSeenRef.current());
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (seenInFlightMessageId.current === candidate.id) {
+          seenInFlightMessageId.current = null;
+        }
+      });
+  }, [
+    appIsActive,
+    documentIsVisible,
+    isDemo,
+    isRouteFocused,
+    messages,
+    otherUser.id,
+    realtime,
+    updateReceipts,
+  ]);
+
+  useEffect(() => {
+    acknowledgeSeenRef.current = acknowledgeLatestViewableMessage;
+    acknowledgeLatestViewableMessage();
+  }, [acknowledgeLatestViewableMessage]);
+
+  const handleViewableMessagesChanged = useCallback(
+    ({ viewableItems }: { viewableItems: ViewToken<ChatMessage>[] }) => {
+      viewableMessageIds.current = new Set(
+        viewableItems.flatMap((token) =>
+          token.isViewable && token.item ? [token.item.id] : [],
+        ),
+      );
+      requestAnimationFrame(() => acknowledgeSeenRef.current());
+    },
+    [],
+  );
+
+  const loadNewerMessages = useCallback(async () => {
+    if (isDemo || !nextAfterCursor || loadingNewerMessages.current) return;
+    loadingNewerMessages.current = true;
+
+    try {
+      const history = await api.messages(params.connectionId, {
+        after: nextAfterCursor,
+      });
+      setResolvedConnection(history.connection);
+      setMessages((current) =>
+        history.messages.reduce(
+          (items, message) => mergeMessage(items, message),
+          current,
+        ),
+      );
+      setNextAfterCursor(history.nextAfterCursor);
+    } catch (error) {
+      setNotice(
+        error instanceof Error
+          ? error.message
+          : "Newer messages could not be loaded.",
+      );
+    } finally {
+      loadingNewerMessages.current = false;
+    }
+  }, [isDemo, nextAfterCursor, params.connectionId]);
+
+  // Keep one receipt indicator below the latest outgoing message the recipient saw.
+  const lastSeenMessage = useMemo(() => {
+    return [...messages].reverse().find(
+      (message) =>
+        message.senderId === user?.id &&
+        !message.isDeleted &&
+        message.receipts.some((receipt) => Boolean(receipt.seenAt)),
+    );
   }, [messages, user?.id]);
+  const lastSeenAt = lastSeenMessage
+    ? latestSeenAt(lastSeenMessage.receipts)
+    : undefined;
 
   useEffect(() => {
     if (!user) return;
+    let active = true;
+
+    initialScrollDone.current = false;
+    isNearBottom.current = true;
+    pendingBottomScroll.current = null;
+    viewableMessageIds.current.clear();
+    seenInFlightMessageId.current = null;
+    acknowledgedSeenMessageId.current = null;
+    loadingNewerMessages.current = false;
+
     void (async () => {
       try {
         const history = isDemo
           ? {
+              connection: demoConnection,
               messages: demoMessages(demoConnection),
               firstUnreadMessageId: null,
+              nextAfterCursor: null,
             }
           : await api.messages(params.connectionId);
-        firstUnreadMessageId.current = history.firstUnreadMessageId;
+        if (!active) return;
+        setResolvedConnection(history.connection);
+        setFirstUnreadMessageId(history.firstUnreadMessageId);
+        setNextAfterCursor(history.nextAfterCursor);
         setMessages(history.messages);
+        setNewMessageCount(0);
+        setLoadedConnectionId(params.connectionId);
       } catch (error) {
-        setNotice(
-          error instanceof Error ? error.message : "Messages could not be loaded.",
-        );
-      } finally {
-        setLoading(false);
+        if (active) {
+          setResolvedConnection(null);
+          setMessages([]);
+          setFirstUnreadMessageId(null);
+          setNextAfterCursor(null);
+          setNewMessageCount(0);
+          setLoadedConnectionId(params.connectionId);
+          setNotice(
+            error instanceof Error ? error.message : "Messages could not be loaded.",
+          );
+        }
       }
     })();
+
+    return () => {
+      active = false;
+    };
   }, [demoConnection, isDemo, params.connectionId, user]);
 
   useEffect(() => {
-    if (!accessToken || !user) return;
+    if (!accessToken || !user || !otherUser.id) return;
     realtime.connect(accessToken, {
+      onConnect: () =>
+        requestAnimationFrame(() => acknowledgeSeenRef.current()),
       onMessage: (message) => {
         if (message.connectionId === params.connectionId) {
+          const shouldFollow = message.senderId === user.id || isNearBottom.current;
+          if (shouldFollow) {
+            followNextMessage(true);
+          } else {
+            setNewMessageCount((count) => count + 1);
+          }
           setMessages((items) => mergeMessage(items, message));
-          scrollToBottom(true);
         }
       },
       onEdited: (message) => {
@@ -485,12 +896,14 @@ export default function ChatScreen() {
         updateReceipts(messageIds, "deliveredAt", deliveredAt),
       onSeen: ({ messageIds, seenAt }) =>
         updateReceipts(messageIds, "seenAt", seenAt),
-      onReaction: ({ messageId, reactions }) =>
+      onUnreadCount: () => undefined,
+      onReaction: ({ messageId, reactions }) => {
         setMessages((items) =>
           items.map((item) =>
             item.id === messageId ? { ...item, reactions } : item,
           ),
-        ),
+        );
+      },
       onUnsent: ({ messageId, deletedAt }) =>
         setMessages((items) =>
           items.map((item) =>
@@ -513,27 +926,13 @@ export default function ChatScreen() {
     return () => realtime.disconnect();
   }, [
     accessToken,
+    followNextMessage,
     otherUser.id,
     params.connectionId,
     realtime,
-    scrollToBottom,
     updateReceipts,
     user,
   ]);
-
-  useEffect(() => {
-    const latestUnread = [...messages]
-      .reverse()
-      .find(
-        (message) =>
-          message.senderId === otherUser.id &&
-          !message.isDeleted &&
-          !message.receipts.some((receipt) => receipt.seenAt),
-      );
-    if (latestUnread && !isDemo) {
-      void realtime.markSeen(latestUnread.id).catch(() => undefined);
-    }
-  }, [isDemo, messages, otherUser.id, realtime]);
 
   const updateText = (value: string) => {
     setText(value);
@@ -545,6 +944,19 @@ export default function ChatScreen() {
         1200,
       );
     }
+  };
+
+  const insertEmoji = ({ emoji }: EmojiSelection) => {
+    const next = insertTextAtSelection(text, inputSelection.current, emoji, 4000);
+    if (!next) return;
+
+    inputSelection.current = next.selection;
+    updateText(next.value);
+  };
+
+  const closeEmojiPicker = () => {
+    setEmojiPickerOpen(false);
+    requestAnimationFrame(() => inputRef.current?.focus());
   };
 
   const validateFiles = (next: SelectedFile[]) => {
@@ -700,9 +1112,9 @@ export default function ChatScreen() {
           })
         ).message;
       }
+      followNextMessage(true);
       setMessages((items) => mergeMessage(items, message));
       realtime.typing(otherUser.id, false);
-      scrollToBottom(true);
     } catch (error) {
       setText(body);
       setFiles(queuedFiles);
@@ -837,125 +1249,158 @@ export default function ChatScreen() {
               <ActivityIndicator color={colors.brand} />
               <EmptyText>Loading conversation</EmptyText>
             </Empty>
-          ) : (
-            <FlatList
+          ) : messages.length ? (
+            <FlashList
               ref={listRef}
               data={messages}
               keyExtractor={(item) => item.id}
               contentContainerStyle={{
-                flexGrow: 1,
-                justifyContent: messages.length ? "flex-end" : "center",
                 paddingVertical: 14,
-                gap: 7,
               }}
-              onContentSizeChange={() => {
-                if (!initialScrollDone.current) {
-                  const unreadIndex = firstUnreadMessageId.current
-                    ? messages.findIndex(
-                        (message) =>
-                          message.id === firstUnreadMessageId.current,
-                      )
-                    : -1;
-                  if (unreadIndex >= 0) {
-                    listRef.current?.scrollToIndex({
-                      index: unreadIndex,
-                      animated: false,
-                      viewPosition: 0.18,
-                    });
-                  } else {
-                    listRef.current?.scrollToEnd({ animated: false });
-                  }
-                  initialScrollDone.current = true;
-                  return;
-                }
-                listRef.current?.scrollToEnd({ animated: true });
-              }}
-              onScrollToIndexFailed={() =>
-                listRef.current?.scrollToEnd({ animated: false })
+              initialScrollIndex={
+                firstUnreadIndex >= 0 ? firstUnreadIndex : undefined
               }
-              ListEmptyComponent={
-                <Empty>
-                  <SmilePlus size={28} color={colors.inkMuted} />
-                  <EmptyText>Start the conversation</EmptyText>
-                </Empty>
-              }
+              maintainVisibleContentPosition={maintainChatPosition}
+              onContentSizeChange={handleContentSizeChange}
+              onLoad={handleInitialListLoad}
+              onEndReached={() => void loadNewerMessages()}
+              onEndReachedThreshold={0.35}
+              onScroll={handleScroll}
+              onViewableItemsChanged={handleViewableMessagesChanged}
+              scrollEventThrottle={16}
+              viewabilityConfig={MESSAGE_VIEWABILITY_CONFIG}
               renderItem={({ item, index }) => {
                 const mine = item.senderId === user.id;
                 const prior = messages[index - 1];
                 const showDate =
-                  !prior ||
-                  new Date(prior.createdAt).toDateString() !==
-                    new Date(item.createdAt).toDateString();
+                  !prior || !isSameCalendarDay(prior.createdAt, item.createdAt);
                 return (
                   <>
                     {showDate ? (
                       <DateMarker>
-                        {new Intl.DateTimeFormat(undefined, {
-                          month: "short",
-                          day: "numeric",
-                        }).format(new Date(item.createdAt))}
+                        <DateMarkerText>
+                          {chatDateLabel(item.createdAt)}
+                        </DateMarkerText>
                       </DateMarker>
                     ) : null}
-                    <MessageRow $mine={mine}>
-                      <Bubble
-                        $mine={mine}
-                        $deleted={item.isDeleted}
-                        disabled={item.pending}
-                        onLongPress={() =>
-                          !item.isDeleted && setSelected(item)
+                    {item.id === firstUnreadMessageId ? (
+                      <UnreadDivider accessibilityLabel="New unread messages start here">
+                        <UnreadDividerLine />
+                        <UnreadDividerLabel>New messages</UnreadDividerLabel>
+                        <UnreadDividerLine />
+                      </UnreadDivider>
+                    ) : null}
+                    <MessageRow
+                      $mine={mine}
+                      $hasReaction={item.reactions.length > 0}
+                    >
+                      <MessageBubbleShell
+                        onPointerEnter={() => setHoveredMessageId(item.id)}
+                        onPointerLeave={() =>
+                          setHoveredMessageId((current) =>
+                            current === item.id ? null : current,
+                          )
                         }
-                        delayLongPress={320}
                       >
-                        {item.isDeleted ? (
-                          <MessageText $mine={mine} $deleted>
-                            Message unsent
-                          </MessageText>
-                        ) : (
-                          <>
-                            {item.media.length ? (
-                              <MediaGrid>
-                                {item.media.map((media) => (
-                                  <WhatsAppMediaCard
-                                    key={media.id ?? media.url}
-                                    media={media}
-                                    mine={mine}
-                                  />
-                                ))}
-                              </MediaGrid>
-                            ) : null}
-                            {item.text ? (
-                              <MessageText $mine={mine}>
-                                {item.text}
-                                {item.editedAt ? " (edited)" : ""}
-                              </MessageText>
-                            ) : null}
-                            <MetaRow>
-                              <Time $mine={mine}>
-                                {messageTime(item.createdAt)}
-                              </Time>
-                            </MetaRow>
-                          </>
-                        )}
-                        {item.reactions.length ? (
-                          <Reaction>
-                            <ReactionText>
-                              {item.reactions
-                                .map((reaction) => reaction.emoji)
-                                .slice(0, 3)
-                                .join("")}
-                            </ReactionText>
-                          </Reaction>
+                        <Bubble
+                          $mine={mine}
+                          $deleted={item.isDeleted}
+                          disabled={item.pending}
+                          onLongPress={() =>
+                            !item.isDeleted && setSelected(item)
+                          }
+                          delayLongPress={320}
+                        >
+                          {item.isDeleted ? (
+                            <MessageText $mine={mine} $deleted>
+                              Message unsent
+                            </MessageText>
+                          ) : (
+                            <>
+                              {item.media.length ? (
+                                <MediaGrid>
+                                  {item.media.map((media, mediaIndex) => (
+                                    <WhatsAppMediaCard
+                                      key={getMappingKey(
+                                        media.id ?? media.url,
+                                        mediaIndex,
+                                      )}
+                                      media={media}
+                                      mine={mine}
+                                    />
+                                  ))}
+                                </MediaGrid>
+                              ) : null}
+                              {item.text ? (
+                                <MessageText $mine={mine}>
+                                  {item.text}
+                                  {item.editedAt ? " (edited)" : ""}
+                                </MessageText>
+                              ) : null}
+                              <MetaRow>
+                                <Time $mine={mine}>
+                                  {messageTime(item.createdAt)}
+                                </Time>
+                              </MetaRow>
+                            </>
+                          )}
+                          {item.reactions.length ? (
+                            <Reaction>
+                              <ReactionText>
+                                {item.reactions
+                                  .map((reaction) => reaction.emoji)
+                                  .slice(0, 3)
+                                  .join("")}
+                              </ReactionText>
+                            </Reaction>
+                          ) : null}
+                        </Bubble>
+                        {shouldShowMessageAction({
+                          isWeb: Platform.OS === "web",
+                          isHovered: hoveredMessageId === item.id,
+                          isDeleted: item.isDeleted,
+                          isPending: Boolean(item.pending),
+                        }) ? (
+                          <MessageActionTrigger
+                            $mine={mine}
+                            accessibilityRole="button"
+                            accessibilityLabel="Open message actions"
+                            onPressIn={() => setHoveredMessageId(item.id)}
+                            onPress={() => setSelected(item)}
+                          >
+                            <ChevronDown
+                              size={17}
+                              color={mine ? colors.white : colors.inkMuted}
+                            />
+                          </MessageActionTrigger>
                         ) : null}
-                      </Bubble>
-                      {mine && item.id === lastSeenMessageId ? (
-                        <SeenLabel>Seen</SeenLabel>
+                      </MessageBubbleShell>
+                      {mine && item.id === lastSeenMessage?.id && lastSeenAt ? (
+                        <SeenLabel $hasReaction={item.reactions.length > 0}>
+                          {seenReceiptLabel(lastSeenAt)}
+                        </SeenLabel>
                       ) : null}
                     </MessageRow>
                   </>
                 );
               }}
             />
+          ) : (
+            <Empty>
+              <SmilePlus size={28} color={colors.inkMuted} />
+              <EmptyText>Start the conversation</EmptyText>
+            </Empty>
           )}
+          {newMessageCount > 0 ? (
+            <NewMessagesButton onPress={() => scrollToBottom(true)}>
+              <ChevronDown size={16} color={colors.brandDark} />
+              <NewMessagesText>
+                {newMessageCount === 1
+                  ? "1 new message"
+                  : `${newMessageCount} new messages`}
+              </NewMessagesText>
+            </NewMessagesButton>
+          ) : null}
         </Messages>
         <ComposerArea>
           {files.length ? (
@@ -1002,20 +1447,47 @@ export default function ChatScreen() {
               onPress={pickImages}
             />
             <IconButton
+              icon={SmilePlus}
+              label="Open emoji picker"
+              tone={emojiPickerOpen ? "soft" : "plain"}
+              onPress={() => {
+                Keyboard.dismiss();
+                setEmojiPickerOpen(true);
+              }}
+            />
+            <IconButton
               icon={Paperclip}
               label="Add documents"
               onPress={pickDocuments}
             />
             <Input
+              ref={inputRef}
               accessibilityLabel="Message"
               multiline
               maxLength={4000}
+              onContentSizeChange={({ nativeEvent }) => {
+                setInputHeight(clampComposerInputHeight(
+                  nativeEvent.contentSize.height,
+                  MIN_COMPOSER_INPUT_HEIGHT,
+                  MAX_COMPOSER_INPUT_HEIGHT,
+                ));
+              }}
+              onSelectionChange={({ nativeEvent }) => {
+                inputSelection.current = nativeEvent.selection;
+              }}
+              scrollEnabled={inputHeight >= MAX_COMPOSER_INPUT_HEIGHT}
+              style={{ height: inputHeight }}
+              textAlignVertical="top"
               value={text}
               onChangeText={updateText}
-              onFocus={() => setFocused(true)}
+              onFocus={() => {
+                setEmojiPickerOpen(false);
+                setFocused(true);
+                if (isNearBottom.current) scrollToBottom(true);
+              }}
               onBlur={() => setFocused(false)}
               onKeyPress={handleInputKeyPress}
-              placeholder="Message (Enter to send, Shift+Enter for newline)"
+              placeholder="Type Message"
               placeholderTextColor={colors.inkMuted}
             />
             <SendButton
@@ -1032,6 +1504,42 @@ export default function ChatScreen() {
               )}
             </SendButton>
           </Composer>
+          {emojiPickerOpen ? (
+            <EmojiPanel
+              style={{ height: Math.min(400, Math.max(300, height * 0.46)) }}
+            >
+              <EmojiPanelHeader>
+                <EmojiPanelTitle>Emojis</EmojiPanelTitle>
+                <IconButton
+                  icon={X}
+                  label="Close emoji picker"
+                  onPress={closeEmojiPicker}
+                />
+              </EmojiPanelHeader>
+              <EmojiPicker
+                categoryBarPosition="bottom"
+                colorScheme="light"
+                enableRecentlyUsed
+                enableSearch
+                maxEmojiVersion="auto"
+                onEmojiSelected={insertEmoji}
+                theme={{
+                  colors: {
+                    accent: colors.accent,
+                    background: colors.surface,
+                    categoryActiveBackground: colors.brandSoft,
+                    categoryBarBackground: colors.surface,
+                    divider: colors.border,
+                    searchBackground: colors.surfaceMuted,
+                    searchPlaceholder: colors.inkMuted,
+                    searchText: colors.ink,
+                    secondaryText: colors.inkMuted,
+                    text: colors.ink,
+                  },
+                }}
+              />
+            </EmojiPanel>
+          ) : null}
         </ComposerArea>
       </Shell>
       <Modal

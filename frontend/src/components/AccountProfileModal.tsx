@@ -1,12 +1,15 @@
+import * as ImagePicker from "expo-image-picker";
 import {
   AtSign,
+  ImagePlus,
   Mail,
   ShieldCheck,
+  Trash2,
   UserRound,
   X,
 } from "lucide-react-native";
 import { useState } from "react";
-import { ActivityIndicator, Modal, Pressable } from "react-native";
+import { ActivityIndicator, Modal, Platform, Pressable } from "react-native";
 import { styled } from "styled-components/native";
 
 import {
@@ -16,9 +19,19 @@ import {
 } from "@/constants/auth";
 import { useAuth } from "@/context/AuthContext";
 import { ApiError } from "@/services/api";
+import {
+  formatIsoBirthDate,
+  parseBirthDateText,
+} from "@/services/birth-date";
 import { colors } from "@/theme";
 import { Avatar } from "./Avatar";
+import { BirthDateField } from "./BirthDateField";
 import { IconButton } from "./IconButton";
+import {
+  ProfilePhotoCropModal,
+  type CroppedProfilePhoto,
+  type ProfileCropSource,
+} from "./ProfilePhotoCropModal";
 
 interface AccountProfileModalProps {
   onClose(): void;
@@ -113,24 +126,55 @@ const Divider = styled.View`
   background-color: ${colors.border};
 `;
 
-const Button = styled(Pressable)<{ $secondary?: boolean }>`
+const PhotoSection = styled.View`
+  align-items: center;
+  gap: 10px;
+  padding: 12px;
+  border-width: 1px;
+  border-color: ${colors.border};
+  border-radius: 8px;
+  background-color: ${colors.surfaceMuted};
+`;
+
+const PhotoActions = styled.View`
+  width: 100%;
+  flex-direction: row;
+  gap: 8px;
+`;
+
+const Button = styled(Pressable)<{ $secondary?: boolean; $danger?: boolean }>`
   min-height: 46px;
+  flex-direction: row;
+  gap: 7px;
   align-items: center;
   justify-content: center;
   padding: 8px 14px;
   border-width: 1px;
-  border-color: ${({ $secondary }) => $secondary ? colors.border : colors.brand};
+  border-color: ${({ $danger, $secondary }) =>
+    $danger ? colors.coral : $secondary ? colors.border : colors.brand};
   border-radius: 8px;
-  background-color: ${({ $secondary }) => $secondary ? colors.surface : colors.brand};
+  background-color: ${({ $danger, $secondary }) =>
+    $danger ? colors.coralSoft : $secondary ? colors.surface : colors.brand};
 `;
 
-const ButtonText = styled.Text<{ $secondary?: boolean }>`
-  color: ${({ $secondary }) => $secondary ? colors.ink : colors.white};
+const PhotoButton = styled(Button)`
+  flex: 1;
+`;
+
+const ButtonText = styled.Text<{ $secondary?: boolean; $danger?: boolean }>`
+  color: ${({ $danger, $secondary }) =>
+    $danger ? colors.coral : $secondary ? colors.ink : colors.white};
   font-size: 14px;
   font-weight: 800;
 `;
 
-type BusyAction = "profile" | "email-request" | "email-verify" | null;
+type BusyAction =
+  | "profile"
+  | "profile-picture"
+  | "profile-picture-remove"
+  | "email-request"
+  | "email-verify"
+  | null;
 type FocusedField = "fullName" | "username" | "email" | "otp" | null;
 
 export function AccountProfileModal({ onClose, onNotice }: AccountProfileModalProps) {
@@ -138,17 +182,23 @@ export function AccountProfileModal({ onClose, onNotice }: AccountProfileModalPr
     user,
     isDemo,
     updateProfile,
+    updateProfilePicture,
+    removeProfilePicture,
     requestEmailChange,
     verifyEmailChange,
   } = useAuth();
   const [fullName, setFullName] = useState(user?.fullName ?? "");
   const [username, setUsername] = useState(user?.username ?? "");
+  const [birthDateText, setBirthDateText] = useState(
+    formatIsoBirthDate(user?.birthDate),
+  );
   const [email, setEmail] = useState(user?.email ?? "");
   const [otp, setOtp] = useState("");
   const [emailOtpSent, setEmailOtpSent] = useState(false);
   const [focused, setFocused] = useState<FocusedField>(null);
   const [busy, setBusy] = useState<BusyAction>(null);
   const [error, setError] = useState("");
+  const [cropSource, setCropSource] = useState<ProfileCropSource | null>(null);
 
   if (!user) return null;
 
@@ -158,15 +208,117 @@ export function AccountProfileModal({ onClose, onNotice }: AccountProfileModalPr
       setError(USERNAME_REQUIREMENTS);
       return;
     }
+    const birthDate = birthDateText
+      ? parseBirthDateText(birthDateText)
+      : undefined;
+    if (birthDateText && !birthDate) {
+      setError("Enter a valid birthdate in DD/MM/YYYY format.");
+      return;
+    }
 
     setBusy("profile");
     setError("");
     try {
-      await updateProfile({ fullName, username: normalizedUsername });
+      await updateProfile({
+        fullName,
+        username: normalizedUsername,
+        birthDate,
+      });
       setUsername(normalizedUsername);
-      onNotice("Name and username updated.");
+      onNotice("Profile details updated.");
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.message : "Profile could not be updated.");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const changeProfilePicture = async () => {
+    if (isDemo) {
+      setError("Profile photo changes are unavailable in preview mode.");
+      return;
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ["images"],
+      allowsEditing: false,
+      quality: 1,
+    });
+    if (result.canceled || !result.assets[0]) return;
+
+    const asset = result.assets[0];
+    if (!asset.width || !asset.height) {
+      setError("The selected image dimensions could not be read.");
+      return;
+    }
+
+    setCropSource({
+      uri: asset.uri,
+      width: asset.width,
+      height: asset.height,
+      fileName: asset.fileName,
+    });
+  };
+
+  const uploadCroppedProfilePicture = async (
+    photo: CroppedProfilePhoto,
+  ) => {
+    setBusy("profile-picture");
+    setError("");
+    try {
+      const form = new FormData();
+      if (Platform.OS === "web") {
+        const response = await fetch(photo.uri);
+        const blob = await response.blob();
+        form.append("file", blob, photo.fileName);
+      } else {
+        form.append(
+          "file",
+          ({
+            uri: photo.uri,
+            name: photo.fileName,
+            type: photo.mimeType,
+          } as unknown as Blob),
+        );
+      }
+
+      const { cleanupPending } = await updateProfilePicture(form);
+      onNotice(
+        cleanupPending
+          ? "Profile photo updated. Previous photo cleanup will be retried."
+          : "Profile photo updated.",
+      );
+      setCropSource(null);
+    } catch (caught) {
+      setError(
+        caught instanceof ApiError
+          ? caught.message
+          : "Profile photo could not be updated.",
+      );
+      throw caught;
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const removeCurrentProfilePicture = async () => {
+    if (isDemo || !user.profilePicture?.url) return;
+
+    setBusy("profile-picture-remove");
+    setError("");
+    try {
+      const { cleanupPending } = await removeProfilePicture();
+      onNotice(
+        cleanupPending
+          ? "Profile photo removed. Cloud cleanup will be retried."
+          : "Profile photo removed.",
+      );
+    } catch (caught) {
+      setError(
+        caught instanceof ApiError
+          ? caught.message
+          : "Profile photo could not be removed.",
+      );
     } finally {
       setBusy(null);
     }
@@ -224,10 +376,11 @@ export function AccountProfileModal({ onClose, onNotice }: AccountProfileModalPr
   const locked = busy !== null;
 
   return (
-    <Modal transparent visible animationType="fade" onRequestClose={() => !locked && onClose()}>
-      <Backdrop>
-        <Dialog>
-          <Scroll>
+    <>
+      <Modal transparent visible animationType="fade" onRequestClose={() => !locked && onClose()}>
+        <Backdrop>
+          <Dialog>
+            <Scroll>
             <Header>
               <Avatar user={user} size={46} />
               <HeaderCopy>
@@ -236,6 +389,51 @@ export function AccountProfileModal({ onClose, onNotice }: AccountProfileModalPr
               </HeaderCopy>
               <IconButton icon={X} label="Close account profile" onPress={() => !locked && onClose()} />
             </Header>
+
+            <SectionTitle>Profile photo</SectionTitle>
+            <PhotoSection>
+              <Avatar user={user} size={76} />
+              <Hint>
+                Google photos can be replaced. Photos uploaded to Bondera are
+                removed from Cloudinary when replaced or deleted.
+              </Hint>
+              <PhotoActions>
+                <PhotoButton
+                  $secondary
+                  disabled={locked || isDemo}
+                  onPress={changeProfilePicture}
+                >
+                  {busy === "profile-picture" ? (
+                    <ActivityIndicator color={colors.brand} />
+                  ) : (
+                    <>
+                      <ImagePlus size={17} color={colors.ink} />
+                      <ButtonText $secondary>
+                        {user.profilePicture?.url ? "Change" : "Add photo"}
+                      </ButtonText>
+                    </>
+                  )}
+                </PhotoButton>
+                {user.profilePicture?.url ? (
+                  <PhotoButton
+                    $danger
+                    disabled={locked || isDemo}
+                    onPress={removeCurrentProfilePicture}
+                  >
+                    {busy === "profile-picture-remove" ? (
+                      <ActivityIndicator color={colors.coral} />
+                    ) : (
+                      <>
+                        <Trash2 size={17} color={colors.coral} />
+                        <ButtonText $danger>Remove</ButtonText>
+                      </>
+                    )}
+                  </PhotoButton>
+                ) : null}
+              </PhotoActions>
+            </PhotoSection>
+
+            <Divider />
 
             <SectionTitle>Name and username</SectionTitle>
             <Label>Full name</Label>
@@ -272,8 +470,21 @@ export function AccountProfileModal({ onClose, onNotice }: AccountProfileModalPr
               />
             </Field>
             <Hint>{USERNAME_REQUIREMENTS}</Hint>
+            <Label>Birthdate</Label>
+            <BirthDateField
+              disabled={locked}
+              invalid={
+                Boolean(birthDateText) && !parseBirthDateText(birthDateText)
+              }
+              value={birthDateText}
+              onChangeText={(value) => {
+                setBirthDateText(value);
+                setError("");
+              }}
+            />
+            <Hint>Enter as DD/MM/YYYY or choose from the calendar.</Hint>
             <Button disabled={locked} onPress={saveProfile}>
-              {busy === "profile" ? <ActivityIndicator color={colors.white} /> : <ButtonText>Save name and username</ButtonText>}
+              {busy === "profile" ? <ActivityIndicator color={colors.white} /> : <ButtonText>Save profile details</ButtonText>}
             </Button>
 
             <Divider />
@@ -331,9 +542,18 @@ export function AccountProfileModal({ onClose, onNotice }: AccountProfileModalPr
             )}
 
             {error ? <Hint $error accessibilityRole="alert">{error}</Hint> : null}
-          </Scroll>
-        </Dialog>
-      </Backdrop>
-    </Modal>
+            </Scroll>
+          </Dialog>
+        </Backdrop>
+      </Modal>
+      {cropSource ? (
+        <ProfilePhotoCropModal
+          key={cropSource.uri}
+          source={cropSource}
+          onCancel={() => !locked && setCropSource(null)}
+          onConfirm={uploadCroppedProfilePicture}
+        />
+      ) : null}
+    </>
   );
 }

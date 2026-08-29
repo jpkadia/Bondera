@@ -1,11 +1,18 @@
 import { Router } from "express";
 import rateLimit from "express-rate-limit";
-import { askPrivateAi } from "../controllers/ai.controller";
-import { authenticate } from "../middleware/authenticate";
+import {
+  askPrivateAi,
+  deleteAiConversation,
+  listAiConversations
+} from "../controllers/ai.controller";
+import { authenticate, requireBirthDate } from "../middleware/authenticate";
 import { requirePremium } from "../middleware/requirePremium";
-import { validateBody } from "../middleware/validateRequest";
+import { validateBody, validateParams } from "../middleware/validateRequest";
 import { asyncHandler } from "../utils/asyncHandler";
-import { askPrivateAiSchema } from "../validation/ai.validation";
+import {
+  aiConversationParamsSchema,
+  askPrivateAiSchema
+} from "../validation/ai.validation";
 
 export const aiRouter = Router();
 
@@ -22,7 +29,14 @@ const aiLimiter = rateLimit({
 });
 
 aiRouter.use(asyncHandler(authenticate));
+aiRouter.use(requireBirthDate);
 aiRouter.use(requirePremium);
+aiRouter.get("/conversations", asyncHandler(listAiConversations));
+aiRouter.delete(
+  "/conversations/:conversationId",
+  validateParams(aiConversationParamsSchema),
+  asyncHandler(deleteAiConversation)
+);
 aiRouter.post(
   "/chat",
   aiLimiter,

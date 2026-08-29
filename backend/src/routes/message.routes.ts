@@ -4,7 +4,7 @@ import {
   listMessages,
   unsendMessage
 } from "../controllers/message.controller";
-import { authenticate } from "../middleware/authenticate";
+import { authenticate, requireBirthDate } from "../middleware/authenticate";
 import {
   validateBody,
   validateParams,
@@ -21,6 +21,7 @@ import {
 export const messageRouter = Router();
 
 messageRouter.use(asyncHandler(authenticate));
+messageRouter.use(requireBirthDate);
 messageRouter.get(
   "/connections/:connectionId",
   validateParams(messageHistoryParamsSchema),

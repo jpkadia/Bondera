@@ -2,7 +2,10 @@ import { randomInt, timingSafeEqual } from "crypto";
 import bcrypt from "bcryptjs";
 import type { Request, Response } from "express";
 import { env } from "../config/env";
-import { PREMIUM_OWNER_EMAIL } from "../constants/auth";
+import {
+  OTP_RESEND_COOLDOWN_SECONDS,
+  OTP_TTL_MINUTES
+} from "../constants/auth";
 import { UserModel, type UserDocument } from "../models/User";
 import {
   createGoogleAuthorizationUrl,
@@ -10,14 +13,37 @@ import {
   verifyGoogleIdToken,
   verifyGoogleState
 } from "../services/googleOAuth.service";
+import {
+  migrateStoredGoogleProfilePicture,
+  mirrorGoogleProfilePicture
+} from "../services/googleProfilePicture.service";
+import { destroyCloudinaryAssetOrQueue } from "../services/cloudinaryCleanup.service";
+import { sendPasswordChangedEmail } from "../services/brevo.service";
+import { ensurePremiumOwner } from "../services/premium.service";
 import { issueOtp, verifyAndConsumeOtp } from "../services/otp.service";
-import { createAuthTokens, verifyRefreshToken } from "../services/token.service";
+import {
+  createAuthTokens,
+  isAuthTokenCurrent,
+  verifyRefreshToken
+} from "../services/token.service";
+import {
+  consumePasswordResetSession,
+  createPasswordResetSession
+} from "../services/passwordReset.service";
 import { AppError } from "../utils/errors";
+import {
+  isGoogleProfilePictureUrl,
+  shouldHydrateGoogleProfilePicture
+} from "../utils/mediaLifecycle";
+import { disconnectUserSockets } from "../socket/realtime";
 import type {
   LoginInput,
   GoogleTokenInput,
+  RequestPasswordResetOtpInput,
   RefreshTokenInput,
+  ResetPasswordInput,
   RequestSignupOtpInput,
+  VerifyPasswordResetOtpInput,
   VerifySignupInput
 } from "../validation/auth.validation";
 
@@ -130,11 +156,15 @@ const buildUniqueGoogleUsername = async (email: string): Promise<string> => {
 
 type GoogleProfile = Awaited<ReturnType<typeof verifyGoogleIdToken>>;
 
-const provisionGoogleUser = async (profile: GoogleProfile): Promise<UserDocument> => {
+const provisionGoogleUser = async (
+  profile: GoogleProfile
+): Promise<UserDocument> => {
   const email = profile.email!.toLowerCase();
   const [userByGoogleId, userByEmail] = await Promise.all([
-    UserModel.findOne({ googleId: profile.sub }).select("+googleId"),
-    UserModel.findOne({ email }).select("+googleId")
+    UserModel.findOne({ googleId: profile.sub }).select(
+      "+googleId +authVersion"
+    ),
+    UserModel.findOne({ email }).select("+googleId +authVersion")
   ]);
 
   if (
@@ -167,31 +197,66 @@ const provisionGoogleUser = async (profile: GoogleProfile): Promise<UserDocument
       existingUser.fullName = profile.name;
     }
 
-    if (!existingUser.profilePicture?.url && profile.picture) {
-      existingUser.profilePicture = { url: profile.picture };
-    }
+    if (shouldHydrateGoogleProfilePicture(
+      existingUser.profilePictureDisabled,
+      existingUser.profilePicture?.url,
+      profile.picture,
+      existingUser.profilePicture?.source,
+      existingUser.profilePicture?.sourceUrl
+    )) {
+      const previousPublicId = existingUser.profilePicture?.publicId;
+      const mirroredPicture = await mirrorGoogleProfilePicture(profile.picture!);
 
-    if (email === PREMIUM_OWNER_EMAIL) {
+      if (mirroredPicture) {
+        existingUser.profilePicture = mirroredPicture;
+      } else if (
+        !existingUser.profilePicture?.url ||
+        isGoogleProfilePictureUrl(existingUser.profilePicture.url)
+      ) {
+        // Preserve immediate Google sign-in UX and retry CDN mirroring next login.
+        existingUser.profilePicture = { url: profile.picture };
+      }
+
+      await existingUser.save();
+      if (
+        mirroredPicture &&
+        previousPublicId &&
+        previousPublicId !== mirroredPicture.publicId
+      ) {
+        await destroyCloudinaryAssetOrQueue(
+          previousPublicId,
+          "image",
+          "google-profile-picture-refreshed"
+        ).catch(() => undefined);
+      }
+    } else {
+      await existingUser.save();
+    }
+    if (await ensurePremiumOwner(existingUser._id, email)) {
       existingUser.isPremium = true;
     }
-
-    await existingUser.save();
     return existingUser;
   }
 
   const username = await buildUniqueGoogleUsername(email);
 
   try {
-    return await UserModel.create({
+    const mirroredPicture = profile.picture
+      ? await mirrorGoogleProfilePicture(profile.picture)
+      : undefined;
+    const user = await UserModel.create({
       email,
       username,
       fullName: profile.name,
       googleId: profile.sub,
       authProviders: ["google"],
-      profilePicture: profile.picture ? { url: profile.picture } : undefined,
-      isEmailVerified: true,
-      isPremium: email === PREMIUM_OWNER_EMAIL
+      profilePicture:
+        mirroredPicture ??
+        (profile.picture ? { url: profile.picture } : undefined),
+      isEmailVerified: true
     });
+    if (await ensurePremiumOwner(user._id, email)) user.isPremium = true;
+    return user;
   } catch (error) {
     if (isDuplicateKeyError(error)) {
       throw new AppError(
@@ -238,11 +303,13 @@ export const verifySignup = async (req: Request, res: Response): Promise<void> =
       email: input.email,
       username: input.username,
       fullName: input.fullName,
+      birthDate: input.birthDate,
       passwordHash,
       authProviders: ["email"],
-      isEmailVerified: true,
-      isPremium: input.email === PREMIUM_OWNER_EMAIL
+      isEmailVerified: true
     });
+
+    if (await ensurePremiumOwner(user._id, input.email)) user.isPremium = true;
 
     respondWithSession(res, user, 201);
   } catch (error) {
@@ -265,7 +332,7 @@ export const login = async (req: Request, res: Response): Promise<void> => {
     : input.identifier;
   const user = await UserModel.findOne(
     identifier.includes("@") ? { email: identifier } : { username: identifier }
-  ).select("+passwordHash");
+  ).select("+passwordHash +authVersion");
 
   if (!user || !(await user.comparePassword(input.password))) {
     throw new AppError(
@@ -283,18 +350,26 @@ export const login = async (req: Request, res: Response): Promise<void> => {
     throw new AppError(403, "EMAIL_NOT_VERIFIED", "Verify your email before signing in.");
   }
 
+  if (await ensurePremiumOwner(user._id, user.email)) user.isPremium = true;
+
+  await migrateStoredGoogleProfilePicture(user).catch(() => false);
+
   respondWithSession(res, user);
 };
 
 export const refreshSession = async (req: Request, res: Response): Promise<void> => {
   const input = req.body as RefreshTokenInput;
   const payload = verifyRefreshToken(input.refreshToken);
-  const user = await UserModel.findOne({ _id: payload.sub, status: "active" });
+  const user = await UserModel.findOne({
+    _id: payload.sub,
+    status: "active"
+  }).select("+authVersion");
 
-  if (!user) {
+  if (!user || !isAuthTokenCurrent(payload, user.authVersion)) {
     throw new AppError(401, "USER_NOT_AVAILABLE", "The authenticated user is unavailable.");
   }
 
+  await migrateStoredGoogleProfilePicture(user).catch(() => false);
   respondWithSession(res, user);
 };
 
@@ -347,4 +422,129 @@ export const authenticateGoogleToken = async (
   const profile = await verifyGoogleIdToken(input.idToken);
   const user = await provisionGoogleUser(profile);
   respondWithSession(res, user);
+};
+
+const normalizeIdentifier = (identifier: string): string =>
+  identifier.startsWith("@") ? identifier.slice(1) : identifier;
+
+const findActiveUserByIdentifier = async (identifier: string) => {
+  const normalized = normalizeIdentifier(identifier);
+
+  return UserModel.findOne({
+    ...(normalized.includes("@")
+      ? { email: normalized }
+      : { username: normalized }),
+    status: "active"
+  });
+};
+
+export const requestPasswordResetOtp = async (
+  req: Request,
+  res: Response
+): Promise<void> => {
+  const input = req.body as RequestPasswordResetOtpInput;
+  const user = await findActiveUserByIdentifier(input.identifier);
+  const fallbackExpiresAt = new Date(
+    Date.now() + OTP_TTL_MINUTES * 60 * 1000
+  );
+  let expiresAt = fallbackExpiresAt;
+  let retryAfterSeconds = OTP_RESEND_COOLDOWN_SECONDS;
+
+  if (user) {
+    try {
+      const result = await issueOtp({
+        email: user.email,
+        purpose: "password_reset",
+        targetUser: user._id,
+        ipAddress: req.ip,
+        userAgent: req.get("user-agent")
+      });
+      expiresAt = result.expiresAt;
+      retryAfterSeconds = result.retryAfterSeconds;
+    } catch (error) {
+      if (!(error instanceof AppError)) {
+        throw error;
+      }
+    }
+  }
+
+  res.status(202).json({
+    success: true,
+    message:
+      "If an active account matches those details, a password reset OTP has been sent.",
+    data: { expiresAt, retryAfterSeconds }
+  });
+};
+
+export const verifyPasswordResetOtp = async (
+  req: Request,
+  res: Response
+): Promise<void> => {
+  const input = req.body as VerifyPasswordResetOtpInput;
+  const user = await findActiveUserByIdentifier(input.identifier);
+
+  if (!user) {
+    throw new AppError(
+      400,
+      "OTP_INVALID",
+      "The OTP is invalid or no longer active."
+    );
+  }
+
+  await verifyAndConsumeOtp(
+    user.email,
+    "password_reset",
+    input.otp,
+    user._id
+  );
+  const session = await createPasswordResetSession({
+    userId: user._id,
+    ipAddress: req.ip,
+    userAgent: req.get("user-agent")
+  });
+
+  res.status(200).json({
+    success: true,
+    data: session
+  });
+};
+
+export const resetPassword = async (
+  req: Request,
+  res: Response
+): Promise<void> => {
+  const input = req.body as ResetPasswordInput;
+  const userId = await consumePasswordResetSession(input.resetToken);
+  const user = await UserModel.findOne({
+    _id: userId,
+    status: "active"
+  }).select("+passwordHash +authVersion");
+
+  if (!user) {
+    throw new AppError(
+      400,
+      "PASSWORD_RESET_SESSION_INVALID",
+      "This password reset session is invalid or expired. Start again."
+    );
+  }
+
+  user.passwordHash = await bcrypt.hash(
+    input.password,
+    env.BCRYPT_SALT_ROUNDS
+  );
+  user.authVersion = (user.authVersion ?? 0) + 1;
+  user.isEmailVerified = true;
+
+  if (!user.authProviders.includes("email")) {
+    user.authProviders.push("email");
+  }
+
+  await user.save();
+  disconnectUserSockets(user._id.toString());
+  void sendPasswordChangedEmail(user.email).catch(() => undefined);
+
+  res.status(200).json({
+    success: true,
+    message: "Your password has been reset. Sign in with your new password."
+  });
 };

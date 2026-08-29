@@ -1,9 +1,14 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 
 import { DEMO_MODE } from "@/config";
+import type { GoogleCredential } from "@/components/GoogleAuthButton.types";
 import { demoUser } from "@/data/demo";
 import { api, configureApi, type SignupDetails } from "@/services/api";
 import { clearSession, loadSession, saveSession } from "@/services/sessionStorage";
+import {
+  getRegisteredPushToken,
+  registerDeviceContext,
+} from "@/services/push-registration";
 import type { Session, User } from "@/types/api";
 
 interface AuthContextValue {
@@ -12,10 +17,18 @@ interface AuthContextValue {
   isBootstrapping: boolean;
   isDemo: boolean;
   login(identifier: string, password: string): Promise<void>;
-  updateProfile(input: { fullName: string; username: string }): Promise<void>;
+  refreshCurrentUser(): Promise<void>;
+  updateProfile(input: {
+    fullName: string;
+    username: string;
+    birthDate?: string;
+  }): Promise<void>;
+  completeBirthDate(birthDate: string): Promise<void>;
+  updateProfilePicture(form: FormData): Promise<{ cleanupPending: boolean }>;
+  removeProfilePicture(): Promise<{ cleanupPending: boolean }>;
   requestEmailChange(email: string): Promise<{ expiresAt: string; retryAfterSeconds: number }>;
   verifyEmailChange(email: string, otp: string): Promise<void>;
-  loginWithGoogle(idToken: string): Promise<void>;
+  loginWithGoogle(credential: GoogleCredential): Promise<void>;
   signup(details: SignupDetails, otp: string): Promise<void>;
   enterDemo(): void;
   logout(): Promise<void>;
@@ -74,16 +87,65 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
-  const updateProfile = useCallback(async (input: { fullName: string; username: string }) => {
+  useEffect(() => {
+    if (!session?.user.birthDate || !session.tokens.accessToken || isDemo) return;
+    let active = true;
+    void registerDeviceContext()
+      .then((context) => api.syncDeviceContext(context))
+      .then((user) => {
+        if (active && user.timeZone !== session.user.timeZone) replaceUser(user);
+      })
+      .catch(() => undefined);
+    return () => { active = false; };
+  }, [isDemo, replaceUser, session?.tokens.accessToken, session?.user.birthDate, session?.user.id, session?.user.timeZone]);
+
+  const updateProfile = useCallback(async (input: {
+    fullName: string;
+    username: string;
+    birthDate?: string;
+  }) => {
     if (isDemo) {
       setSession((current) => current ? {
         ...current,
-        user: { ...current.user, fullName: input.fullName || undefined, username: input.username },
+        user: {
+          ...current.user,
+          fullName: input.fullName || undefined,
+          username: input.username,
+          birthDate: input.birthDate ?? current.user.birthDate,
+        },
       } : current);
       return;
     }
     replaceUser(await api.updateProfile(input));
   }, [isDemo, replaceUser]);
+
+  const refreshCurrentUser = useCallback(async () => {
+    if (isDemo) return;
+    replaceUser(await api.me());
+  }, [isDemo, replaceUser]);
+
+  const completeBirthDate = useCallback(async (birthDate: string) => {
+    if (isDemo) {
+      setSession((current) => current ? {
+        ...current,
+        user: { ...current.user, birthDate },
+      } : current);
+      return;
+    }
+    replaceUser(await api.completeBirthDate(birthDate));
+  }, [isDemo, replaceUser]);
+
+  const updateProfilePicture = useCallback(async (form: FormData) => {
+    const result = await api.uploadProfilePicture(form);
+    replaceUser(result.user);
+    return { cleanupPending: result.previousCleanupPending };
+  }, [replaceUser]);
+
+  const removeProfilePicture = useCallback(async () => {
+    const result = await api.removeProfilePicture();
+    replaceUser(result.user);
+    return { cleanupPending: result.cleanupPending };
+  }, [replaceUser]);
 
   const requestEmailChange = useCallback(
     (email: string) => api.requestEmailChange(email),
@@ -101,9 +163,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     applySession(next);
   }, [applySession]);
 
-  const loginWithGoogle = useCallback(async (idToken: string) => {
+  const loginWithGoogle = useCallback(async (credential: GoogleCredential) => {
     configureApi(null);
-    const next = await api.googleLogin(idToken);
+    const next = await api.googleLogin(credential);
     setIsDemo(false);
     applySession(next);
   }, [applySession]);
@@ -119,11 +181,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const logout = useCallback(async () => {
+    const expoPushToken = getRegisteredPushToken();
+    if (expoPushToken && !isDemo) {
+      await api.unregisterDevice(expoPushToken).catch(() => undefined);
+    }
     setSession(null);
     setIsDemo(false);
     configureApi(null);
     await clearSession();
-  }, []);
+  }, [isDemo]);
 
   const value = useMemo<AuthContextValue>(() => ({
     user: session?.user ?? null,
@@ -131,14 +197,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     isBootstrapping,
     isDemo,
     login,
+    refreshCurrentUser,
     updateProfile,
+    completeBirthDate,
+    updateProfilePicture,
+    removeProfilePicture,
     requestEmailChange,
     verifyEmailChange,
     loginWithGoogle,
     signup,
     enterDemo,
     logout,
-  }), [enterDemo, isBootstrapping, isDemo, login, loginWithGoogle, logout, requestEmailChange, session, signup, updateProfile, verifyEmailChange]);
+  }), [completeBirthDate, enterDemo, isBootstrapping, isDemo, login, loginWithGoogle, logout, refreshCurrentUser, removeProfilePicture, requestEmailChange, session, signup, updateProfile, updateProfilePicture, verifyEmailChange]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

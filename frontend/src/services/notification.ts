@@ -51,7 +51,7 @@ export function showDeviceNotification(
       try {
         const notification = new Notification(title, {
           body: options.body,
-          icon: options.icon || "/assets/images/icon.png",
+          icon: options.icon || "/bondera-icon.png",
           tag: options.tag,
         });
         if (options.onClick) {

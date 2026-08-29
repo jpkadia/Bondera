@@ -1,5 +1,7 @@
 import { API_URL } from "@/config";
+import type { GoogleCredential } from "@/components/GoogleAuthButton.types";
 import type {
+  AiConversation,
   ApiEnvelope,
   ApiErrorPayload,
   AuthTokens,
@@ -7,6 +9,8 @@ import type {
   ChatMessage,
   Connection,
   PrivateAiReply,
+  PremiumRequestState,
+  PremiumRequestSummary,
   Session,
   User,
 } from "@/types/api";
@@ -35,10 +39,11 @@ export function configureApi(
 }
 
 export interface SignupDetails {
-  fullName?: string;
+  fullName: string;
   username: string;
   email: string;
   password: string;
+  birthDate: string;
 }
 
 async function parseResponse<T>(response: Response): Promise<T> {
@@ -87,6 +92,7 @@ async function request<T>(path: string, init: RequestInit = {}, retry = true): P
 }
 
 export const api = {
+  me: () => request<{ user: User }>("/users/me").then((data) => data.user),
   requestSignupOtp: (details: SignupDetails) =>
     request<{ expiresAt: string; retryAfterSeconds: number }>("/auth/signup/request-otp", {
       method: "POST",
@@ -113,24 +119,79 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ identifier: identifier.trim().toLowerCase(), password }),
     }),
-  googleLogin: (idToken: string) =>
+  googleLogin: (credential: GoogleCredential) =>
     request<Session>("/auth/google/token", {
       method: "POST",
-      body: JSON.stringify({ idToken }),
+      body: JSON.stringify(credential),
+    }, false),
+  requestPasswordResetOtp: (identifier: string) =>
+    request<{ expiresAt: string; retryAfterSeconds: number }>(
+      "/auth/password/forgot/request-otp",
+      {
+        method: "POST",
+        body: JSON.stringify({ identifier: identifier.trim().toLowerCase() }),
+      },
+      false,
+    ),
+  verifyPasswordResetOtp: (identifier: string, otp: string) =>
+    request<{ resetToken: string; expiresAt: string }>(
+      "/auth/password/forgot/verify-otp",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          identifier: identifier.trim().toLowerCase(),
+          otp: otp.trim(),
+        }),
+      },
+      false,
+    ),
+  resetPassword: (resetToken: string, password: string) =>
+    request<void>("/auth/password/forgot/reset", {
+      method: "POST",
+      body: JSON.stringify({ resetToken, password }),
     }, false),
   refresh: (refreshToken: string) =>
     request<Session>("/auth/refresh", {
       method: "POST",
       body: JSON.stringify({ refreshToken }),
     }, false),
-  updateProfile: (input: { fullName: string; username: string }) =>
+  updateProfile: (input: {
+    fullName: string;
+    username: string;
+    birthDate?: string;
+  }) =>
     request<{ user: User }>("/users/me/profile", {
       method: "PATCH",
       body: JSON.stringify({
         fullName: input.fullName.trim(),
         username: input.username.trim().toLowerCase(),
+        ...(input.birthDate ? { birthDate: input.birthDate } : {}),
       }),
     }).then((data) => data.user),
+  completeBirthDate: (birthDate: string) =>
+    request<{ user: User }>("/users/me/profile", {
+      method: "PATCH",
+      body: JSON.stringify({ birthDate }),
+    }).then((data) => data.user),
+  syncDeviceContext: (input: {
+    timeZone: string;
+    expoPushToken?: string;
+    platform?: "android" | "ios";
+  }) => request<{ user: User }>("/users/me/device-context", {
+    method: "PUT",
+    body: JSON.stringify(input),
+  }).then((data) => data.user),
+  unregisterDevice: (expoPushToken: string) =>
+    request<void>("/users/me/device-context", {
+      method: "DELETE",
+      body: JSON.stringify({ expoPushToken }),
+    }),
+  premiumRequest: () =>
+    request<PremiumRequestSummary>("/users/me/premium-request"),
+  requestPremium: () =>
+    request<{ request: PremiumRequestState }>("/users/me/premium-request", {
+      method: "POST",
+    }),
   requestEmailChange: (email: string) =>
     request<{ expiresAt: string; retryAfterSeconds: number }>("/users/me/email/request-otp", {
       method: "POST",
@@ -169,9 +230,20 @@ export const api = {
     }),
   removeConnection: (connectionId: string) =>
     request<void>(`/connections/${connectionId}`, { method: "DELETE" }),
-  messages: (connectionId: string, before?: string) =>
-    request<{ messages: ChatMessage[]; firstUnreadMessageId: string | null; nextCursor: string | null }>(
-      `/messages/connections/${connectionId}?limit=30${before ? `&before=${encodeURIComponent(before)}` : ""}`,
+  messages: (
+    connectionId: string,
+    cursor?: { before?: string; after?: string },
+  ) =>
+    request<{
+      connection: Connection;
+      messages: ChatMessage[];
+      firstUnreadMessageId: string | null;
+      nextCursor: string | null;
+      nextAfterCursor: string | null;
+    }>(
+      `/messages/connections/${connectionId}?limit=100${
+        cursor?.before ? `&before=${encodeURIComponent(cursor.before)}` : ""
+      }${cursor?.after ? `&after=${encodeURIComponent(cursor.after)}` : ""}`,
     ),
   editMessage: (messageId: string, text: string) => request<{ message: ChatMessage }>(
     `/messages/${messageId}`,
@@ -185,9 +257,28 @@ export const api = {
     method: "POST",
     body: form,
   }),
-  askPrivateAi: (question: string) =>
+  uploadProfilePicture: (form: FormData) =>
+    request<{ user: User; previousCleanupPending: boolean }>(
+      "/media/profile-picture",
+      { method: "POST", body: form },
+    ),
+  removeProfilePicture: () =>
+    request<{ user: User; cleanupPending: boolean }>(
+      "/media/profile-picture",
+      { method: "DELETE" },
+    ),
+  aiConversations: () =>
+    request<{ conversations: AiConversation[] }>("/ai/conversations"),
+  deleteAiConversation: (conversationId: string) =>
+    request<{ conversationId: string }>(`/ai/conversations/${conversationId}`, {
+      method: "DELETE",
+    }),
+  askPrivateAi: (question: string, conversationId?: string) =>
     request<PrivateAiReply>("/ai/chat", {
       method: "POST",
-      body: JSON.stringify({ question: question.trim() }),
+      body: JSON.stringify({
+        question: question.trim(),
+        ...(conversationId ? { conversationId } : {}),
+      }),
     }),
 };

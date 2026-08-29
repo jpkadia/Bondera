@@ -5,13 +5,17 @@ import {
   CLOUDINARY_PROFILE_PICTURES_FOLDER
 } from "../constants/media";
 import { ConnectionModel } from "../models/Connection";
-import { MessageModel, type MessageMedia } from "../models/Message";
+import { MessageModel } from "../models/Message";
 import { UserModel } from "../models/User";
 import {
   destroyCloudinaryAsset,
   uploadCloudinaryFiles
 } from "../services/cloudinary.service";
-import { isConnectionChatEnabled } from "../services/connection.service";
+import { destroyCloudinaryAssetOrQueue } from "../services/cloudinaryCleanup.service";
+import {
+  buildConnectionViews,
+  isConnectionChatEnabled
+} from "../services/connection.service";
 import {
   createChatMessage,
   serializeMessage
@@ -19,6 +23,7 @@ import {
 import { emitToUser, isUserOnline } from "../socket/realtime";
 import type { AuthenticatedRequest } from "../types/http";
 import { AppError } from "../utils/errors";
+import { cleanupResourceType } from "../utils/mediaLifecycle";
 import type {
   ChatMediaMessageInput,
   EditMessageInput,
@@ -43,20 +48,6 @@ const requireParam = (req: AuthenticatedRequest, name: string): string => {
   }
 
   return value;
-};
-
-const cleanupResourceType = (
-  asset: Pick<MessageMedia, "resourceType" | "mimeType">
-): "image" | "video" | "raw" => {
-  if (asset.resourceType !== "auto") {
-    return asset.resourceType;
-  }
-
-  if (asset.mimeType.startsWith("video/") || asset.mimeType.startsWith("audio/")) {
-    return "video";
-  }
-
-  return asset.mimeType.startsWith("image/") ? "image" : "raw";
 };
 
 export const listMessages = async (
@@ -86,13 +77,6 @@ export const listMessages = async (
     );
   }
 
-  const messages = await MessageModel.find({
-    connection: connection._id,
-    ...(query.before ? { createdAt: { $lt: new Date(query.before) } } : {})
-  })
-    .sort({ createdAt: -1, _id: -1 })
-    .limit(query.limit);
-  const ordered = messages.reverse();
   const firstUnread = await MessageModel.findOne({
     connection: connection._id,
     recipient: currentUser.mongoId,
@@ -104,19 +88,90 @@ export const listMessages = async (
       }
     }
   })
-    .select("_id")
+    .select("_id createdAt")
     .sort({ createdAt: 1, _id: 1 })
     .lean();
+
+  let ordered;
+  let nextCursor: string | null = null;
+  let nextAfterCursor: string | null = null;
+
+  if (query.before) {
+    const messages = await MessageModel.find({
+      connection: connection._id,
+      createdAt: { $lt: new Date(query.before) }
+    })
+      .sort({ createdAt: -1, _id: -1 })
+      .limit(query.limit);
+    ordered = messages.reverse();
+    nextCursor =
+      messages.length === query.limit && ordered[0]
+        ? ordered[0].createdAt.toISOString()
+        : null;
+  } else if (query.after) {
+    ordered = await MessageModel.find({
+      connection: connection._id,
+      createdAt: { $gt: new Date(query.after) }
+    })
+      .sort({ createdAt: 1, _id: 1 })
+      .limit(query.limit);
+    nextAfterCursor =
+      ordered.length === query.limit && ordered.at(-1)
+        ? ordered.at(-1)!.createdAt.toISOString()
+        : null;
+  } else if (firstUnread) {
+    const [contextMessages, unreadPage] = await Promise.all([
+      MessageModel.find({
+        connection: connection._id,
+        createdAt: { $lt: firstUnread.createdAt }
+      })
+        .sort({ createdAt: -1, _id: -1 })
+        .limit(10),
+      MessageModel.find({
+        connection: connection._id,
+        createdAt: { $gte: firstUnread.createdAt }
+      })
+        .sort({ createdAt: 1, _id: 1 })
+        .limit(query.limit)
+    ]);
+    ordered = [...contextMessages.reverse(), ...unreadPage];
+    nextCursor = contextMessages.at(0)?.createdAt.toISOString() ?? null;
+    nextAfterCursor =
+      unreadPage.length === query.limit && unreadPage.at(-1)
+        ? unreadPage.at(-1)!.createdAt.toISOString()
+        : null;
+  } else {
+    const messages = await MessageModel.find({ connection: connection._id })
+      .sort({ createdAt: -1, _id: -1 })
+      .limit(query.limit);
+    ordered = messages.reverse();
+    nextCursor =
+      messages.length === query.limit && ordered[0]
+        ? ordered[0].createdAt.toISOString()
+        : null;
+  }
+
+  const [connectionView] = await buildConnectionViews(
+    [connection],
+    currentUser.mongoId
+  );
+
+  if (!connectionView) {
+    throw new AppError(
+      404,
+      "CONNECTED_USER_NOT_FOUND",
+      "The connected user is unavailable."
+    );
+  }
 
   res.status(200).json({
     success: true,
     data: {
+      connection: connectionView,
       messages: ordered.map(serializeMessage),
       firstUnreadMessageId: firstUnread?._id.toString() ?? null,
-      nextCursor:
-        messages.length === query.limit && ordered[0]
-          ? ordered[0].createdAt.toISOString()
-          : null
+      nextCursor,
+      nextAfterCursor
     }
   });
 };
@@ -258,17 +313,16 @@ export const unsendMessage = async (
     await message.save();
   }
 
-  const cleanupResults = await Promise.allSettled(
+  const cleanupResults = await Promise.all(
     message.media.map((asset) =>
-      destroyCloudinaryAsset(
+      destroyCloudinaryAssetOrQueue(
         asset.publicId,
-        cleanupResourceType(asset)
+        cleanupResourceType(asset),
+        "message-unsent"
       )
     )
   );
-  const mediaCleanupPending = cleanupResults.some(
-    (result) => result.status === "rejected"
-  );
+  const mediaCleanupPending = cleanupResults.some((cleaned) => !cleaned);
 
   if (!mediaCleanupPending && !message.cloudinaryDestroyedAt) {
     message.cloudinaryDestroyedAt = new Date();
@@ -324,8 +378,10 @@ export const uploadProfilePicture = async (
   try {
     user.profilePicture = {
       url: uploaded.secureUrl,
-      publicId: uploaded.publicId
+      publicId: uploaded.publicId,
+      source: "upload"
     };
+    user.profilePictureDisabled = false;
     await user.save();
   } catch (error) {
     await destroyCloudinaryAsset(uploaded.publicId, uploaded.resourceType);
@@ -335,18 +391,52 @@ export const uploadProfilePicture = async (
   let previousCleanupPending = false;
 
   if (previousPicture?.publicId) {
-    try {
-      await destroyCloudinaryAsset(previousPicture.publicId, "image");
-    } catch {
-      previousCleanupPending = true;
-    }
+    previousCleanupPending = !(await destroyCloudinaryAssetOrQueue(
+      previousPicture.publicId,
+      "image",
+      "profile-picture-replaced"
+    ));
   }
 
   res.status(200).json({
     success: true,
     data: {
-      profilePicture: user.profilePicture,
+      user: user.toJSON(),
       previousCleanupPending
+    }
+  });
+};
+
+export const removeProfilePicture = async (
+  req: AuthenticatedRequest,
+  res: Response
+): Promise<void> => {
+  const currentUser = requireCurrentUser(req);
+  const user = await UserModel.findById(currentUser.mongoId);
+
+  if (!user) {
+    throw new AppError(404, "USER_NOT_FOUND", "User was not found.");
+  }
+
+  const previousPicture = user.profilePicture;
+  user.profilePicture = undefined;
+  user.profilePictureDisabled = true;
+  await user.save();
+
+  let cleanupPending = false;
+  if (previousPicture?.publicId) {
+    cleanupPending = !(await destroyCloudinaryAssetOrQueue(
+      previousPicture.publicId,
+      "image",
+      "profile-picture-removed"
+    ));
+  }
+
+  res.status(200).json({
+    success: true,
+    data: {
+      user: user.toJSON(),
+      cleanupPending
     }
   });
 };

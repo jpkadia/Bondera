@@ -50,7 +50,7 @@ export function GoogleAuthButton({
         onError("Google did not return a valid sign-in credential.");
         return;
       }
-      await onCredential(response.data.idToken);
+      await onCredential({ idToken: response.data.idToken });
     } catch (error) {
       const detail = isErrorWithCode(error) ? ` (${error.code})` : "";
       onError(`Google Sign-In failed${detail}. Please try again.`);

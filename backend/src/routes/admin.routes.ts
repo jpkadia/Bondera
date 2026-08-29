@@ -7,6 +7,8 @@ import {
   listAdminAuditLogs,
   listAdminConnections,
   listAdminUsers,
+  listPremiumRequests,
+  decidePremiumRequest,
   listDeletedMessages,
   logoutAdmin,
   requestAdminLoginOtp,
@@ -27,8 +29,10 @@ import {
   adminLoginSchema,
   adminPaginationSchema,
   adminUserParamsSchema,
+  adminPremiumRequestParamsSchema,
   adminVerifyOtpSchema,
-  premiumToggleSchema
+  premiumToggleSchema,
+  premiumRequestDecisionSchema
 } from "../validation/admin.validation";
 
 export const adminRouter = Router();
@@ -74,6 +78,18 @@ adminRouter.patch(
   validateParams(adminUserParamsSchema),
   validateBody(premiumToggleSchema),
   asyncHandler(toggleUserPremium)
+);
+adminRouter.get(
+  "/premium-requests",
+  validateQuery(adminPaginationSchema),
+  asyncHandler(listPremiumRequests)
+);
+adminRouter.patch(
+  "/premium-requests/:requestId",
+  requireAdminCsrf,
+  validateParams(adminPremiumRequestParamsSchema),
+  validateBody(premiumRequestDecisionSchema),
+  asyncHandler(decidePremiumRequest)
 );
 adminRouter.get(
   "/connections",

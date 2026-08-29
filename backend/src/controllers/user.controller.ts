@@ -1,10 +1,16 @@
 import type { Response } from "express";
 import { UserModel } from "../models/User";
+import { DeviceInstallationModel } from "../models/DeviceInstallation";
+import { PremiumRequestModel } from "../models/PremiumRequest";
+import { MAX_PREMIUM_USERS } from "../constants/admin";
 import { issueOtp, verifyAndConsumeOtp } from "../services/otp.service";
+import { migrateStoredGoogleProfilePicture } from "../services/googleProfilePicture.service";
 import type { AuthenticatedRequest } from "../types/http";
 import { AppError } from "../utils/errors";
 import type {
   RequestEmailChangeOtpInput,
+  DeviceContextInput,
+  UnregisterDeviceInput,
   UpdateProfileInput,
   VerifyEmailChangeInput
 } from "../validation/user.validation";
@@ -30,6 +36,7 @@ export const getMyProfile = async (
   res: Response
 ): Promise<void> => {
   const user = await requireUser(req);
+  await migrateStoredGoogleProfilePicture(user).catch(() => false);
   res.status(200).json({ success: true, data: { user: user.toJSON() } });
 };
 
@@ -55,6 +62,10 @@ export const updateMyProfile = async (
 
   if (input.fullName !== undefined) {
     user.fullName = input.fullName || undefined;
+  }
+
+  if (input.birthDate !== undefined) {
+    user.birthDate = input.birthDate;
   }
 
   try {
@@ -137,4 +148,127 @@ export const verifyEmailChange = async (
   }
 
   res.status(200).json({ success: true, data: { user: user.toJSON() } });
+};
+
+export const syncDeviceContext = async (
+  req: AuthenticatedRequest,
+  res: Response
+): Promise<void> => {
+  const input = req.body as DeviceContextInput;
+  const user = await requireUser(req);
+
+  if (user.timeZone !== input.timeZone) {
+    user.timeZone = input.timeZone;
+    await user.save();
+  }
+
+  if (input.expoPushToken && input.platform) {
+    await DeviceInstallationModel.findOneAndUpdate(
+      { expoPushToken: input.expoPushToken },
+      {
+        $set: {
+          user: user._id,
+          platform: input.platform,
+          timeZone: input.timeZone,
+          active: true,
+          lastSeenAt: new Date()
+        },
+        $unset: { invalidatedAt: 1 }
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+  }
+
+  res.status(200).json({ success: true, data: { user: user.toJSON() } });
+};
+
+export const unregisterDevice = async (
+  req: AuthenticatedRequest,
+  res: Response
+): Promise<void> => {
+  const input = req.body as UnregisterDeviceInput;
+  await DeviceInstallationModel.updateOne(
+    { user: req.user!.mongoId, expoPushToken: input.expoPushToken },
+    {
+      $set: { active: false, invalidatedAt: new Date() }
+    }
+  );
+  res.status(204).send();
+};
+
+const premiumRequestView = (request?: {
+  status: string;
+  requestedAt: Date;
+  decidedAt?: Date;
+  adminNote?: string;
+} | null) => request
+  ? {
+      status: request.status,
+      requestedAt: request.requestedAt,
+      decidedAt: request.decidedAt,
+      adminNote: request.adminNote
+    }
+  : null;
+
+export const getMyPremiumRequest = async (
+  req: AuthenticatedRequest,
+  res: Response
+): Promise<void> => {
+  const [user, request, premiumCount] = await Promise.all([
+    requireUser(req),
+    PremiumRequestModel.findOne({ user: req.user!.mongoId }).lean(),
+    UserModel.countDocuments({ isPremium: true })
+  ]);
+
+  res.status(200).json({
+    success: true,
+    data: {
+      isPremium: user.isPremium,
+      request: premiumRequestView(request),
+      premiumCount,
+      premiumLimit: MAX_PREMIUM_USERS
+    }
+  });
+};
+
+export const requestPremiumAccess = async (
+  req: AuthenticatedRequest,
+  res: Response
+): Promise<void> => {
+  const user = await requireUser(req);
+
+  if (user.isPremium) {
+    throw new AppError(409, "ALREADY_PREMIUM", "Your account already has premium access.");
+  }
+
+  const existing = await PremiumRequestModel.findOne({ user: user._id });
+  if (existing?.status === "pending") {
+    res.status(200).json({
+      success: true,
+      data: { request: premiumRequestView(existing) }
+    });
+    return;
+  }
+
+  const request = await PremiumRequestModel.findOneAndUpdate(
+    { user: user._id },
+    {
+      $set: {
+        status: "pending",
+        requestedAt: new Date()
+      },
+      $unset: {
+        decidedAt: 1,
+        decidedBy: 1,
+        adminNote: 1
+      }
+    },
+    { upsert: true, new: true, setDefaultsOnInsert: true }
+  );
+
+  res.status(202).json({
+    success: true,
+    message: "Your premium request has been sent to the admin.",
+    data: { request: premiumRequestView(request) }
+  });
 };

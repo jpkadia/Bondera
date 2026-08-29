@@ -57,7 +57,8 @@ function loadGoogleIdentityServices(): Promise<void> {
     const handleLoad = () => window.google?.accounts.id
       ? resolve()
       : reject(new Error("Google Identity Services did not initialize."));
-    const handleError = () => reject(new Error("Google Identity Services could not be loaded."));
+    const handleError = () =>
+      reject(new Error("Google Identity Services could not be loaded."));
 
     script.addEventListener("load", handleLoad, { once: true });
     script.addEventListener("error", handleError, { once: true });
@@ -105,7 +106,7 @@ export function GoogleAuthButton({
             onError("Google did not return a valid sign-in credential.");
             return;
           }
-          void onCredential(response.credential);
+          void onCredential({ idToken: response.credential });
         },
         auto_select: false,
         cancel_on_tap_outside: true,
@@ -123,7 +124,11 @@ export function GoogleAuthButton({
     };
 
     void loadGoogleIdentityServices().then(render).catch(() => {
-      if (active) onError("Google Sign-In could not be loaded. Check your connection and try again.");
+      if (active) {
+        onError(
+          "Google Sign-In could not be loaded. Check your connection and try again.",
+        );
+      }
     });
     window.addEventListener("resize", render);
 

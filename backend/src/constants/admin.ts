@@ -1,6 +1,8 @@
-export const ADMIN_EMAIL = "kadiyaparth612@gmail.com";
+import { env } from "../config/env";
 
-export const ADMIN_PASSWORD = "Admindeer@1";
+export const ADMIN_EMAIL = env.ADMIN_EMAIL;
+
+export const ADMIN_PASSWORD = env.ADMIN_PASSWORD;
 
 export const ADMIN_SESSION_COOKIE = "bondera_admin_session";
 

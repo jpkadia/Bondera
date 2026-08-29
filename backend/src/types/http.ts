@@ -8,6 +8,7 @@ export interface AuthenticatedRequest extends Request {
     email: string;
     username: string;
     uniqueId: string;
+    birthDate?: string;
     isPremium: boolean;
   };
 }

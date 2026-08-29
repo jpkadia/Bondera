@@ -27,12 +27,18 @@ import { Notice } from "@/components/Notice";
 import { useAuth } from "@/context/AuthContext";
 import { api, ApiError } from "@/services/api";
 import {
+  removeAiConversation as removeAiConversationFromList,
+  shouldShowAiSuggestions,
+  upsertAiConversation,
+} from "@/services/ai-conversations";
+import {
   deleteAiConversation,
   loadAiConversations,
   saveAiConversations,
   type StoredAiConversation,
 } from "@/services/aiChatStorage";
 import { colors } from "@/theme";
+import type { PremiumRequestSummary } from "@/types/api";
 
 interface AiTurn {
   id: string;
@@ -185,6 +191,44 @@ const LockedText = styled.Text`
   color: ${colors.inkMuted};
   font-size: 14px;
   line-height: 20px;
+`;
+
+const PremiumStatus = styled.View<{ $tone: "plain" | "pending" | "error" }>`
+  align-self: flex-start;
+  padding: 7px 10px;
+  border-radius: 8px;
+  background-color: ${({ $tone }) =>
+    $tone === "pending"
+      ? colors.amberSoft
+      : $tone === "error"
+        ? colors.coralSoft
+        : colors.surfaceMuted};
+`;
+
+const PremiumStatusText = styled.Text<{ $tone: "plain" | "pending" | "error" }>`
+  color: ${({ $tone }) =>
+    $tone === "pending"
+      ? colors.amber
+      : $tone === "error"
+        ? colors.coral
+        : colors.ink};
+  font-size: 13px;
+  font-weight: 800;
+`;
+
+const PremiumRequestButton = styled(Pressable)`
+  min-height: 46px;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 14px;
+  border-radius: 8px;
+  background-color: ${colors.brand};
+`;
+
+const PremiumRequestText = styled.Text`
+  color: ${colors.white};
+  font-size: 14px;
+  font-weight: 900;
 `;
 
 const ExampleGrid = styled.View`
@@ -349,7 +393,7 @@ function demoAnswer(question: string): AiTurn {
 export default function PrivateAiScreen() {
   const { width } = useWindowDimensions();
   const wide = width >= 860;
-  const { user, isDemo } = useAuth();
+  const { user, isDemo, refreshCurrentUser } = useAuth();
   const historyScrollRef = useRef<ScrollView>(null);
   const [question, setQuestion] = useState("");
   const [conversations, setConversations] = useState<StoredAiConversation[]>([]);
@@ -359,6 +403,8 @@ export default function PrivateAiScreen() {
   const [notice, setNotice] = useState<{ message: string; error?: boolean } | null>(null);
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
   const [desktopSidebarOpen, setDesktopSidebarOpen] = useState(true);
+  const [premiumSummary, setPremiumSummary] = useState<PremiumRequestSummary | null>(null);
+  const [premiumRequestBusy, setPremiumRequestBusy] = useState(false);
 
   const activeConversation = useMemo(
     () => conversations.find((conversation) => conversation.id === activeConversationId),
@@ -366,21 +412,79 @@ export default function PrivateAiScreen() {
   );
 
   useEffect(() => {
+    if (!user || (!user.isPremium && !isDemo)) return;
     let mounted = true;
-    void loadAiConversations().then((items) => {
-      if (!mounted) return;
-      setConversations(items);
-      if (items[0]) {
-        setActiveConversationId(items[0].id);
-        setTurns(items[0].turns);
-      }
-    });
+    void (isDemo
+      ? loadAiConversations()
+      : api.aiConversations().then((data) => data.conversations)
+    )
+      .then((items) => {
+        if (!mounted) return;
+        setConversations(items);
+        if (items[0]) {
+          setActiveConversationId(items[0].id);
+          setTurns(items[0].turns);
+        }
+      })
+      .catch((error) => {
+        if (!mounted) return;
+        setNotice({
+          message:
+            error instanceof ApiError
+              ? error.message
+              : "AI chat history could not be loaded.",
+          error: true,
+        });
+      });
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [isDemo, user]);
+
+  useEffect(() => {
+    if (!user || user.isPremium || isDemo) return;
+    let mounted = true;
+    const loadPremiumStatus = async () => {
+      try {
+        const summary = await api.premiumRequest();
+        if (!mounted) return;
+        setPremiumSummary(summary);
+        if (summary.isPremium) await refreshCurrentUser();
+      } catch {
+        // The request button remains available if status refresh temporarily fails.
+      }
+    };
+    void loadPremiumStatus();
+    const interval = setInterval(() => void loadPremiumStatus(), 15000);
+    return () => {
+      mounted = false;
+      clearInterval(interval);
+    };
+  }, [isDemo, refreshCurrentUser, user]);
 
   const locked = !user?.isPremium && !isDemo;
+
+  const requestPremium = async () => {
+    if (premiumRequestBusy) return;
+    setPremiumRequestBusy(true);
+    setNotice(null);
+    try {
+      const result = await api.requestPremium();
+      setPremiumSummary((current) => ({
+        isPremium: false,
+        request: result.request,
+        premiumCount: current?.premiumCount ?? 0,
+        premiumLimit: current?.premiumLimit ?? 3,
+      }));
+    } catch (error) {
+      setNotice({
+        message: error instanceof ApiError ? error.message : "Premium request could not be sent.",
+        error: true,
+      });
+    } finally {
+      setPremiumRequestBusy(false);
+    }
+  };
 
   const scrollToBottom = (animated = true) => {
     setTimeout(() => {
@@ -427,7 +531,34 @@ export default function PrivateAiScreen() {
   };
 
   const removeConversation = async (conversationId: string) => {
-    const updated = await deleteAiConversation(conversationId);
+    if (isDemo) {
+      const updated = await deleteAiConversation(conversationId);
+      setConversations(updated);
+      if (activeConversationId === conversationId) {
+        if (updated[0]) {
+          setActiveConversationId(updated[0].id);
+          setTurns(updated[0].turns);
+        } else {
+          startNewChat();
+        }
+      }
+      return;
+    }
+
+    try {
+      await api.deleteAiConversation(conversationId);
+    } catch (error) {
+      setNotice({
+        message:
+          error instanceof ApiError
+            ? error.message
+            : "AI chat could not be deleted.",
+        error: true,
+      });
+      return;
+    }
+
+    const updated = removeAiConversationFromList(conversations, conversationId);
     setConversations(updated);
     if (activeConversationId === conversationId) {
       if (updated[0]) {
@@ -454,19 +585,15 @@ export default function PrivateAiScreen() {
         return;
       }
 
-      const reply = await api.askPrivateAi(trimmed);
-      const nextTurns = [
-        ...turns,
-        {
-          id: generateTurnId(),
-          question: trimmed,
-          answer: reply.answer,
-          textMessagesAnalyzed: reply.context.textMessagesAnalyzed,
-          historyTruncated: reply.context.historyTruncated,
-        },
-      ];
-      setTurns(nextTurns);
-      await persistConversation(nextTurns);
+      const reply = await api.askPrivateAi(
+        trimmed,
+        activeConversationId ?? undefined,
+      );
+      const conversation = reply.conversation;
+      setActiveConversationId(conversation.id);
+      setTurns(conversation.turns);
+      setConversations((current) => upsertAiConversation(current, conversation));
+      scrollToBottom(true);
     } catch (error) {
       setQuestion(trimmed);
       setNotice({
@@ -555,16 +682,62 @@ export default function PrivateAiScreen() {
                 <Sparkles size={26} color={colors.amber} />
                 <LockedTitle>Premium required</LockedTitle>
                 <LockedText>Private AI is available for premium accounts only.</LockedText>
+                {premiumSummary?.request ? (
+                  <PremiumStatus
+                    $tone={
+                      premiumSummary.request.status === "pending"
+                        ? "pending"
+                        : premiumSummary.request.status === "approved"
+                          ? "plain"
+                          : "error"
+                    }
+                  >
+                    <PremiumStatusText
+                      $tone={
+                        premiumSummary.request.status === "pending"
+                          ? "pending"
+                          : premiumSummary.request.status === "approved"
+                            ? "plain"
+                            : "error"
+                      }
+                    >
+                      {premiumSummary.request.status === "pending"
+                        ? "Request pending · Admin review in progress"
+                        : premiumSummary.request.status === "rejected"
+                          ? "Request declined · You can request again"
+                          : premiumSummary.request.status === "revoked"
+                            ? "Premium access was removed"
+                            : "Request approved · Updating access"}
+                    </PremiumStatusText>
+                  </PremiumStatus>
+                ) : null}
+                {premiumSummary?.request?.status !== "pending" ? (
+                  <PremiumRequestButton
+                    disabled={premiumRequestBusy}
+                    onPress={() => void requestPremium()}
+                    style={({ pressed }) => ({
+                      opacity: pressed || premiumRequestBusy ? 0.72 : 1,
+                    })}
+                  >
+                    {premiumRequestBusy ? (
+                      <ActivityIndicator color={colors.white} />
+                    ) : (
+                      <PremiumRequestText>Request premium access</PremiumRequestText>
+                    )}
+                  </PremiumRequestButton>
+                ) : null}
               </LockedPanel>
             ) : (
               <>
-                <ExampleGrid>
-                  {examples.map((item) => (
-                    <Example key={item} disabled={busy} onPress={() => void ask(item)}>
-                      <ExampleText>{item}</ExampleText>
-                    </Example>
-                  ))}
-                </ExampleGrid>
+                {shouldShowAiSuggestions(turns.length, busy) ? (
+                  <ExampleGrid>
+                    {examples.map((item) => (
+                      <Example key={item} onPress={() => void ask(item)}>
+                        <ExampleText>{item}</ExampleText>
+                      </Example>
+                    ))}
+                  </ExampleGrid>
+                ) : null}
                 <History
                   ref={historyScrollRef}
                   keyboardShouldPersistTaps="handled"

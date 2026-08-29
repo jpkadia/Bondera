@@ -22,6 +22,7 @@ const envSchema = z.object({
     .default("development"),
   PORT: z.coerce.number().int().positive().default(5000),
   API_BASE_URL: z.string().url().default("http://localhost:5000"),
+  BIRTHDAY_JOB_SECRET: optionalNonEmptyString,
   CLIENT_ORIGIN: z.string().min(1).default("http://localhost:8081"),
   REDIS_URL: z.string().url().optional(),
   MONGODB_URI: z.string().min(1, "MONGODB_URI is required"),
@@ -32,6 +33,11 @@ const envSchema = z.object({
   JWT_ACCESS_EXPIRES_IN: z.string().default("15m"),
   JWT_REFRESH_EXPIRES_IN: z.string().default("30d"),
   BCRYPT_SALT_ROUNDS: z.coerce.number().int().min(10).max(15).default(12),
+  ADMIN_EMAIL: z.string().email("ADMIN_EMAIL must be valid"),
+  ADMIN_PASSWORD: z
+    .string()
+    .min(10, "ADMIN_PASSWORD must be at least 10 characters")
+    .max(128, "ADMIN_PASSWORD cannot exceed 128 characters"),
   GOOGLE_CLIENT_ID: z.string().min(1, "GOOGLE_CLIENT_ID is required"),
   GOOGLE_CLIENT_SECRET: z.string().min(1, "GOOGLE_CLIENT_SECRET is required"),
   GOOGLE_ANDROID_CLIENT_ID: optionalNonEmptyString,

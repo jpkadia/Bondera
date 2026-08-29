@@ -1,6 +1,6 @@
 import { timingSafeEqual } from "crypto";
 import type { Response } from "express";
-import mongoose, { Types } from "mongoose";
+import { Types } from "mongoose";
 import { env } from "../config/env";
 import {
   ADMIN_EMAIL,
@@ -12,10 +12,14 @@ import {
 import { AdminAuditLogModel } from "../models/AdminAuditLog";
 import { ConnectionModel } from "../models/Connection";
 import { MessageModel } from "../models/Message";
-import { SystemStateModel } from "../models/SystemState";
+import { PremiumRequestModel } from "../models/PremiumRequest";
 import { UserModel } from "../models/User";
 import { createAdminSession } from "../services/adminToken.service";
 import { getOpenAiUsageStats } from "../services/openaiUsage.service";
+import {
+  rejectPremiumRequest,
+  setPremiumStatus
+} from "../services/premium.service";
 import { issueOtp, verifyAndConsumeOtp } from "../services/otp.service";
 import type { AuthenticatedAdminRequest } from "../types/http";
 import { AppError } from "../utils/errors";
@@ -23,7 +27,8 @@ import type {
   AdminLoginInput,
   AdminPaginationInput,
   AdminVerifyOtpInput,
-  PremiumToggleInput
+  PremiumToggleInput,
+  PremiumRequestDecisionInput
 } from "../validation/admin.validation";
 
 const constantTimeEqual = (left: string, right: string): boolean => {
@@ -162,9 +167,10 @@ export const getAdminOverview = async (
   _req: AuthenticatedAdminRequest,
   res: Response
 ): Promise<void> => {
-  const [users, premiumUsers, rooms, activeRooms, deletedMessages] = await Promise.all([
+  const [users, premiumUsers, pendingPremiumRequests, rooms, activeRooms, deletedMessages] = await Promise.all([
     UserModel.countDocuments(),
     UserModel.countDocuments({ isPremium: true }),
+    PremiumRequestModel.countDocuments({ status: "pending" }),
     ConnectionModel.countDocuments(),
     ConnectionModel.countDocuments({ status: "accepted" }),
     MessageModel.countDocuments({ isDeleted: true })
@@ -176,6 +182,7 @@ export const getAdminOverview = async (
       users,
       premiumUsers,
       premiumLimit: MAX_PREMIUM_USERS,
+      pendingPremiumRequests,
       rooms,
       activeRooms,
       deletedMessages
@@ -261,99 +268,111 @@ export const toggleUserPremium = async (
     throw new AppError(422, "USER_ID_REQUIRED", "User ID is required.");
   }
 
-  const session = await mongoose.startSession();
-  let updatedUser:
-    | {
-        id: string;
-        email: string;
-        username: string;
-        isPremium: boolean;
-      }
-    | undefined;
+  const result = await setPremiumStatus({
+    userId,
+    isPremium,
+    actorEmail: admin.email,
+    ipAddress: req.ip,
+    userAgent: req.get("user-agent")
+  });
+  res.status(200).json({
+    success: true,
+    data: result
+  });
+};
 
-  try {
-    await session.withTransaction(async () => {
-      await SystemStateModel.findOneAndUpdate(
-        { _id: "premium-limit" },
-        { $inc: { revision: 1 } },
-        { upsert: true, new: true, session, setDefaultsOnInsert: true }
-      );
+export const listPremiumRequests = async (
+  req: AuthenticatedAdminRequest,
+  res: Response
+): Promise<void> => {
+  const query = req.query as unknown as AdminPaginationInput;
+  const { page, limit, skip } = pagination(query);
+  const [requests, total] = await Promise.all([
+    PremiumRequestModel.find()
+      .sort({ status: 1, requestedAt: 1 })
+      .skip(skip)
+      .limit(limit)
+      .lean(),
+    PremiumRequestModel.countDocuments()
+  ]);
+  const users = await UserModel.find({
+    _id: { $in: requests.map((request) => request.user) }
+  })
+    .select("email username fullName uniqueId isPremium status")
+    .lean();
+  const usersById = new Map(users.map((user) => [user._id.toString(), user]));
 
-      const user = await UserModel.findById(userId).session(session);
-
-      if (!user) {
-        throw new AppError(404, "USER_NOT_FOUND", "User was not found.");
-      }
-
-      if (user.isPremium === isPremium) {
-        updatedUser = {
-          id: user._id.toString(),
-          email: user.email,
-          username: user.username,
-          isPremium: user.isPremium
-        };
-        return;
-      }
-
-      if (isPremium) {
-        const [premiumCount, ownerExists] = await Promise.all([
-          UserModel.countDocuments({ isPremium: true }).session(session),
-          UserModel.exists({ email: ADMIN_EMAIL }).session(session)
-        ]);
-        const effectiveLimit = ownerExists ? MAX_PREMIUM_USERS : MAX_PREMIUM_USERS - 1;
-
-        if (premiumCount >= effectiveLimit) {
-          throw new AppError(
-            409,
-            "PREMIUM_LIMIT_REACHED",
-            `A maximum of ${MAX_PREMIUM_USERS} users can be premium.`
-          );
-        }
-      }
-
-      user.isPremium = isPremium;
-      await user.save({ session });
-      await AdminAuditLogModel.create(
-        [
-          {
-            actorEmail: admin.email,
-            action: isPremium ? "premium_granted" : "premium_revoked",
-            targetUser: user._id,
-            metadata: {
-              username: user.username,
-              uniqueId: user.uniqueId
-            },
-            ipAddress: req.ip,
-            userAgent: req.get("user-agent")
-          }
-        ],
-        { session }
-      );
-
-      updatedUser = {
-        id: user._id.toString(),
-        email: user.email,
-        username: user.username,
-        isPremium: user.isPremium
-      };
-    });
-  } finally {
-    await session.endSession();
-  }
-
-  if (!updatedUser) {
-    throw new AppError(500, "PREMIUM_UPDATE_FAILED", "Premium status could not be updated.");
-  }
-
-  const premiumCount = await UserModel.countDocuments({ isPremium: true });
   res.status(200).json({
     success: true,
     data: {
-      user: updatedUser,
-      premiumCount,
-      premiumLimit: MAX_PREMIUM_USERS
+      items: requests.flatMap((request) => {
+        const user = usersById.get(request.user.toString());
+        return user ? [{
+          id: request._id.toString(),
+          status: request.status,
+          requestedAt: request.requestedAt,
+          decidedAt: request.decidedAt,
+          adminNote: request.adminNote,
+          user: {
+            id: user._id.toString(),
+            email: user.email,
+            username: user.username,
+            fullName: user.fullName,
+            uniqueId: user.uniqueId,
+            isPremium: user.isPremium,
+            status: user.status
+          }
+        }] : [];
+      }),
+      pagination: {
+        page,
+        limit,
+        total,
+        pages: Math.max(Math.ceil(total / limit), 1)
+      }
     }
   });
+};
+
+export const decidePremiumRequest = async (
+  req: AuthenticatedAdminRequest,
+  res: Response
+): Promise<void> => {
+  const admin = requireAdmin(req);
+  const requestId = req.params.requestId;
+  const input = req.body as PremiumRequestDecisionInput;
+  const request = await PremiumRequestModel.findById(requestId);
+
+  if (!request) {
+    throw new AppError(404, "PREMIUM_REQUEST_NOT_FOUND", "Premium request was not found.");
+  }
+  if (request.status !== "pending") {
+    throw new AppError(
+      409,
+      "PREMIUM_REQUEST_NOT_PENDING",
+      "This premium request is no longer pending."
+    );
+  }
+
+  if (input.decision === "approved") {
+    await setPremiumStatus({
+      userId: request.user,
+      isPremium: true,
+      actorEmail: admin.email,
+      ipAddress: req.ip,
+      userAgent: req.get("user-agent")
+    });
+  } else {
+    await rejectPremiumRequest(
+      request._id,
+      admin.email,
+      input.adminNote,
+      req.ip,
+      req.get("user-agent")
+    );
+  }
+
+  res.status(200).json({ success: true, data: { requestId, status: input.decision } });
 };
 
 export const listAdminConnections = async (

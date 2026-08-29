@@ -23,5 +23,9 @@ export default function IndexScreen() {
     );
   }
 
-  return <Redirect href={user ? "/home" : "/login"} />;
+  return (
+    <Redirect
+      href={!user ? "/login" : user.birthDate ? "/home" : "/complete-birthdate"}
+    />
+  );
 }

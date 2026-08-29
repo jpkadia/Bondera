@@ -5,6 +5,7 @@ import mongoose, {
   model
 } from "mongoose";
 import { USERNAME_PATTERN } from "../constants/auth";
+import { isValidBirthDate } from "../utils/birthDate";
 import { generateUniqueId } from "../utils/generateUniqueId";
 
 const profilePictureSchema = new Schema(
@@ -14,6 +15,14 @@ const profilePictureSchema = new Schema(
       trim: true
     },
     publicId: {
+      type: String,
+      trim: true
+    },
+    source: {
+      type: String,
+      enum: ["google", "upload"]
+    },
+    sourceUrl: {
       type: String,
       trim: true
     }
@@ -51,6 +60,20 @@ const userSchema = new Schema(
       trim: true,
       maxlength: 80
     },
+    birthDate: {
+      type: String,
+      validate: {
+        validator: (value?: string) => !value || isValidBirthDate(value),
+        message: "Birthdate must be a valid past date in YYYY-MM-DD format."
+      }
+    },
+    timeZone: {
+      type: String,
+      required: true,
+      default: "Asia/Kolkata",
+      trim: true,
+      maxlength: 100
+    },
     passwordHash: {
       type: String,
       select: false
@@ -71,6 +94,12 @@ const userSchema = new Schema(
         message: "At least one authentication provider is required."
       }
     },
+    authVersion: {
+      type: Number,
+      default: 0,
+      min: 0,
+      select: false
+    },
     uniqueId: {
       type: String,
       unique: true,
@@ -83,6 +112,10 @@ const userSchema = new Schema(
       match: [/^[A-Z0-9]{10}$/, "Unique ID must be exactly 10 uppercase letters or numbers."]
     },
     profilePicture: profilePictureSchema,
+    profilePictureDisabled: {
+      type: Boolean,
+      default: false
+    },
     bio: {
       type: String,
       trim: true,
@@ -116,6 +149,12 @@ const userSchema = new Schema(
       transform: (_doc, ret) => {
         delete ret.passwordHash;
         delete ret.googleId;
+        delete (ret as Record<string, unknown>).authVersion;
+        delete (ret as Record<string, unknown>).profilePictureDisabled;
+        if (ret.profilePicture && typeof ret.profilePicture === "object") {
+          delete (ret.profilePicture as Record<string, unknown>).source;
+          delete (ret.profilePicture as Record<string, unknown>).sourceUrl;
+        }
         return ret;
       }
     },
@@ -172,14 +211,20 @@ export interface User {
   email: string;
   username: string;
   fullName?: string;
+  birthDate?: string;
+  timeZone: string;
   passwordHash?: string;
   googleId?: string;
   authProviders: Array<"email" | "google">;
+  authVersion: number;
   uniqueId: string;
   profilePicture?: {
     url?: string;
     publicId?: string;
+    source?: "google" | "upload";
+    sourceUrl?: string;
   };
+  profilePictureDisabled: boolean;
   bio?: string;
   isEmailVerified: boolean;
   isPremium: boolean;

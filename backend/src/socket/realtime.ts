@@ -28,3 +28,7 @@ export const isUserOnline = (userId: string): boolean => {
 export const emitToUser = (userId: string, event: string, payload: unknown): void => {
   socketServer?.to(userRoom(userId)).emit(event, payload);
 };
+
+export const disconnectUserSockets = (userId: string): void => {
+  socketServer?.in(userRoom(userId)).disconnectSockets(true);
+};

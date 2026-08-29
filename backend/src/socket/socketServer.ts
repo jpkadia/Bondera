@@ -12,8 +12,16 @@ import {
   createChatMessage,
   serializeMessage
 } from "../services/message.service";
-import { verifyAccessToken } from "../services/token.service";
+import { sendPushToUser } from "../services/pushNotification.service";
+import {
+  isAuthTokenCurrent,
+  verifyAccessToken
+} from "../services/token.service";
 import { AppError } from "../utils/errors";
+import {
+  reactionMessagePreview,
+  shouldNotifyMessageOwnerOfReaction
+} from "../utils/reactionNotification";
 import {
   clearSocketServer,
   emitToUser,
@@ -230,32 +238,49 @@ const registerSocketHandlers = (socket: AuthenticatedSocket): void => {
         .select("_id")
         .lean();
 
-      if (unread.length === 0) {
-        return { messageIds: [], seenAt: undefined };
+      const seenAt = unread.length > 0 ? new Date() : undefined;
+      const messageIds = unread.map((message) => message._id);
+      if (seenAt) {
+        await MessageModel.updateMany(
+          { _id: { $in: messageIds } },
+          {
+            $set: {
+              "receipts.$[receipt].deliveredAt": seenAt,
+              "receipts.$[receipt].seenAt": seenAt
+            }
+          },
+          {
+            arrayFilters: [{ "receipt.user": currentUserId }]
+          }
+        );
       }
 
-      const seenAt = new Date();
-      const messageIds = unread.map((message) => message._id);
-      await MessageModel.updateMany(
-        { _id: { $in: messageIds } },
-        {
-          $set: {
-            "receipts.$[receipt].deliveredAt": seenAt,
-            "receipts.$[receipt].seenAt": seenAt
+      const unreadCount = await MessageModel.countDocuments({
+        connection: target.connection,
+        recipient: currentUserId,
+        isDeleted: false,
+        receipts: {
+          $elemMatch: {
+            user: currentUserId,
+            seenAt: null
           }
-        },
-        {
-          arrayFilters: [{ "receipt.user": currentUserId }]
         }
-      );
+      });
 
       const receiptPayload = {
         connectionId: target.connection.toString(),
         recipientId: currentUserIdString,
         messageIds: messageIds.map((id) => id.toString()),
-        seenAt
+        seenAt,
+        unreadCount
       };
-      emitToUser(target.sender.toString(), "messages:seen", receiptPayload);
+      if (seenAt) {
+        emitToUser(target.sender.toString(), "messages:seen", receiptPayload);
+      }
+      emitToUser(currentUserIdString, "connection:unread", {
+        connectionId: receiptPayload.connectionId,
+        unreadCount
+      });
       return receiptPayload;
     });
   });
@@ -309,7 +334,53 @@ const registerSocketHandlers = (socket: AuthenticatedSocket): void => {
         }))
       };
       emitToUser(currentUserIdString, "message:reaction", reactionPayload);
-      emitToUser(otherUserId.toString(), "message:reaction", reactionPayload);
+
+      const otherUserIdString = otherUserId.toString();
+      const reactionWasAdded = existingReaction?.emoji !== input.emoji;
+      const shouldNotifyOwner = shouldNotifyMessageOwnerOfReaction(
+        currentUserIdString,
+        message.sender.toString(),
+        reactionWasAdded
+      );
+
+      if (shouldNotifyOwner) {
+        const reactor = await UserModel.findById(currentUserId)
+          .select("username fullName")
+          .lean();
+        const reactorName =
+          reactor?.fullName?.trim() ||
+          (reactor?.username ? `@${reactor.username}` : "Someone");
+        const messagePreview = reactionMessagePreview(
+          message.text,
+          message.media.length
+        );
+        const notification = {
+          connectionId: message.connection.toString(),
+          messageId: message._id.toString(),
+          reactorId: currentUserIdString,
+          reactorName,
+          emoji: input.emoji,
+          messagePreview
+        };
+
+        emitToUser(otherUserIdString, "message:reaction", {
+          ...reactionPayload,
+          notification
+        });
+        void sendPushToUser(otherUserId, {
+          title: `${reactorName} reacted to your message`,
+          body: `${input.emoji} ${messagePreview}`,
+          channelId: "messages",
+          data: {
+            type: "message_reaction",
+            connectionId: notification.connectionId,
+            messageId: notification.messageId,
+            url: `/chat/${notification.connectionId}`
+          }
+        }).catch(() => undefined);
+      } else {
+        emitToUser(otherUserIdString, "message:reaction", reactionPayload);
+      }
       return reactionPayload;
     });
   });
@@ -359,10 +430,21 @@ export const initializeSocketServer = async (server: HttpServer): Promise<Server
       }
 
       const payload = verifyAccessToken(token);
-      const user = await UserModel.findOne({ _id: payload.sub, status: "active" }).select("_id");
+      const user = await UserModel.findOne({
+        _id: payload.sub,
+        status: "active"
+      }).select("_id birthDate +authVersion");
 
-      if (!user) {
+      if (!user || !isAuthTokenCurrent(payload, user.authVersion)) {
         throw new AppError(401, "USER_NOT_AVAILABLE", "The authenticated user is unavailable.");
+      }
+
+      if (!user.birthDate) {
+        throw new AppError(
+          403,
+          "BIRTH_DATE_REQUIRED",
+          "Add your birthdate before using Bondera chat."
+        );
       }
 
       socket.data.userId = user._id.toString();

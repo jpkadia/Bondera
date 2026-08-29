@@ -6,6 +6,7 @@ import { connectionRouter } from "./connection.routes";
 import { mediaRouter } from "./media.routes";
 import { messageRouter } from "./message.routes";
 import { userRouter } from "./user.routes";
+import { jobRouter } from "./job.routes";
 
 export const apiRouter = Router();
 
@@ -16,3 +17,4 @@ apiRouter.use("/connections", connectionRouter);
 apiRouter.use("/messages", messageRouter);
 apiRouter.use("/media", mediaRouter);
 apiRouter.use("/users", userRouter);
+apiRouter.use("/jobs", jobRouter);

@@ -15,12 +15,11 @@ const subjectByPurpose: Record<SendOtpEmailInput["purpose"], string> = {
   password_reset: "Reset your Bondera password"
 };
 
-export const sendOtpEmail = async ({
-  email,
-  otp,
-  expiresInMinutes,
-  purpose
-}: SendOtpEmailInput): Promise<void> => {
+const sendTransactionalEmail = async (
+  email: string,
+  subject: string,
+  htmlContent: string
+): Promise<void> => {
   let response: Response;
 
   try {
@@ -37,15 +36,8 @@ export const sendOtpEmail = async ({
           name: env.BREVO_SENDER_NAME
         },
         to: [{ email }],
-        subject: subjectByPurpose[purpose],
-        htmlContent: `
-          <div style="font-family:Arial,sans-serif;color:#171717;line-height:1.5">
-            <h2 style="margin-bottom:12px">Bondera verification</h2>
-            <p>Use this one-time code to continue:</p>
-            <p style="font-size:30px;font-weight:700;letter-spacing:8px;margin:20px 0">${otp}</p>
-            <p>This code expires in ${expiresInMinutes} minutes. Do not share it with anyone.</p>
-          </div>
-        `
+        subject,
+        htmlContent
       })
     });
   } catch {
@@ -63,4 +55,40 @@ export const sendOtpEmail = async ({
       "Verification email could not be delivered. Please try again."
     );
   }
+};
+
+export const sendOtpEmail = async ({
+  email,
+  otp,
+  expiresInMinutes,
+  purpose
+}: SendOtpEmailInput): Promise<void> => {
+  await sendTransactionalEmail(
+    email,
+    subjectByPurpose[purpose],
+    `
+      <div style="font-family:Arial,sans-serif;color:#171717;line-height:1.5">
+        <h2 style="margin-bottom:12px">Bondera verification</h2>
+        <p>Use this one-time code to continue:</p>
+        <p style="font-size:30px;font-weight:700;letter-spacing:8px;margin:20px 0">${otp}</p>
+        <p>This code expires in ${expiresInMinutes} minutes. Do not share it with anyone.</p>
+      </div>
+    `
+  );
+};
+
+export const sendPasswordChangedEmail = async (
+  email: string
+): Promise<void> => {
+  await sendTransactionalEmail(
+    email,
+    "Your Bondera password was changed",
+    `
+      <div style="font-family:Arial,sans-serif;color:#171717;line-height:1.5">
+        <h2 style="margin-bottom:12px">Password changed</h2>
+        <p>Your Bondera account password was changed successfully.</p>
+        <p>If you did not make this change, contact Bondera support immediately.</p>
+      </div>
+    `
+  );
 };

@@ -6,7 +6,6 @@ import {
   EyeOff,
   LockKeyhole,
   Mail,
-  MessageCircleMore,
   ShieldCheck,
   UserRound,
 } from "lucide-react-native";
@@ -21,14 +20,23 @@ import {
 import { styled } from "styled-components/native";
 
 import { IconButton } from "@/components/IconButton";
+import { BrandSymbol } from "@/components/BrandLogo";
 import { GoogleAuthButton } from "@/components/GoogleAuthButton";
+import type { GoogleCredential } from "@/components/GoogleAuthButton.types";
+import { BirthDateField } from "@/components/BirthDateField";
 import { useAuth } from "@/context/AuthContext";
 import {
   normalizeUsernameInput,
-  USERNAME_PATTERN,
   USERNAME_REQUIREMENTS,
 } from "@/constants/auth";
 import { api, ApiError, type SignupDetails } from "@/services/api";
+import { parseBirthDateText } from "@/services/birth-date";
+import {
+  validateOtp,
+  validateSignupValues,
+  type SignupErrors,
+  type SignupValues,
+} from "@/services/auth-validation";
 import { colors } from "@/theme";
 
 type FieldName = "fullName" | "username" | "email" | "password" | "confirm" | "otp";
@@ -54,15 +62,6 @@ const BrandRow = styled.View`
   flex-direction: row;
   align-items: center;
   gap: 12px;
-`;
-
-const BrandMark = styled.View`
-  width: 46px;
-  height: 46px;
-  align-items: center;
-  justify-content: center;
-  border-radius: 8px;
-  background-color: ${colors.brand};
 `;
 
 const BrandCopy = styled.View`
@@ -201,23 +200,6 @@ const DividerText = styled.Text`
   font-size: 12px;
 `;
 
-function validate(details: SignupDetails, confirm: string): string {
-  if (details.fullName && details.fullName.trim().length > 80) {
-    return "Full name cannot exceed 80 characters.";
-  }
-  if (!USERNAME_PATTERN.test(details.username.trim())) {
-    return USERNAME_REQUIREMENTS;
-  }
-  if (!/^\S+@\S+\.\S+$/.test(details.email.trim())) {
-    return "Enter a valid email address.";
-  }
-  if (!/^(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{6,}$/.test(details.password)) {
-    return "Password must include an uppercase letter, number, and special character.";
-  }
-  if (details.password !== confirm) return "Passwords do not match.";
-  return "";
-}
-
 export default function SignupScreen() {
   const { user, signup, loginWithGoogle } = useAuth();
   const [step, setStep] = useState<"details" | "otp">("details");
@@ -226,17 +208,22 @@ export default function SignupScreen() {
     username: "",
     email: "",
     password: "",
+    birthDate: "",
   });
+  const [birthDateText, setBirthDateText] = useState("");
   const [confirm, setConfirm] = useState("");
   const [otp, setOtp] = useState("");
   const [focused, setFocused] = useState<FieldName | null>(null);
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
+  const [fieldErrors, setFieldErrors] = useState<SignupErrors>({});
   const [busy, setBusy] = useState(false);
   const [resendSeconds, setResendSeconds] = useState(0);
 
   useEffect(() => {
-    if (user) router.replace("/home");
+    if (user) {
+      router.replace(user.birthDate ? "/home" : "/complete-birthdate");
+    }
   }, [user]);
 
   useEffect(() => {
@@ -245,12 +232,12 @@ export default function SignupScreen() {
     return () => clearInterval(timer);
   }, [resendSeconds]);
 
-  const submitGoogle = useCallback(async (idToken: string) => {
+  const submitGoogle = useCallback(async (credential: GoogleCredential) => {
     if (busy) return;
     setBusy(true);
     setError("");
     try {
-      await loginWithGoogle(idToken);
+      await loginWithGoogle(credential);
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.message : "Google Sign-In failed. Try again.");
     } finally {
@@ -260,25 +247,44 @@ export default function SignupScreen() {
 
   if (user) return null;
 
+  const signupValues = (): SignupValues => ({
+    fullName: details.fullName ?? "",
+    username: details.username,
+    email: details.email,
+    password: details.password,
+    confirmPassword: confirm,
+    birthDateText,
+  });
+
+  const validateDetailField = (field: keyof SignupValues) => {
+    const next = validateSignupValues(signupValues());
+    setFieldErrors((current) => ({ ...current, [field]: next[field] }));
+  };
+
   const update = (key: keyof SignupDetails, value: string) => {
     setDetails((current) => ({
       ...current,
       [key]: key === "username" ? normalizeUsernameInput(value) : value,
     }));
+    const errorKey = key === "birthDate" ? "birthDateText" : key;
+    if (fieldErrors[errorKey as keyof SignupErrors]) {
+      setFieldErrors((current) => ({ ...current, [errorKey]: undefined }));
+    }
     if (error) setError("");
   };
 
   const requestOtp = async () => {
     if (busy) return;
-    const validationError = validate(details, confirm);
-    if (validationError) {
-      setError(validationError);
-      return;
-    }
+    const birthDate = parseBirthDateText(birthDateText);
+    const nextDetails = { ...details, birthDate: birthDate ?? "" };
+    const validationErrors = validateSignupValues(signupValues());
+    setFieldErrors(validationErrors);
+    if (Object.keys(validationErrors).length > 0) return;
     setBusy(true);
     setError("");
     try {
-      const result = await api.requestSignupOtp(details);
+      setDetails(nextDetails);
+      const result = await api.requestSignupOtp(nextDetails);
       setResendSeconds(result.retryAfterSeconds);
       setStep("otp");
     } catch (caught) {
@@ -290,10 +296,9 @@ export default function SignupScreen() {
 
   const verifyOtp = async () => {
     if (busy) return;
-    if (!/^\d{6}$/.test(otp)) {
-      setError("Enter the 6-digit OTP sent to your email.");
-      return;
-    }
+    const otpError = validateOtp(otp);
+    setFieldErrors((current) => ({ ...current, otp: otpError }));
+    if (otpError) return;
     setBusy(true);
     setError("");
     try {
@@ -325,7 +330,7 @@ export default function SignupScreen() {
         <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ flexGrow: 1, justifyContent: "center" }}>
           <Content>
             <BrandRow>
-              <BrandMark><MessageCircleMore size={26} color={colors.white} /></BrandMark>
+              <BrandSymbol size={46} />
               <BrandCopy><Brand>Bondera</Brand><Eyebrow>Your private circles</Eyebrow></BrandCopy>
             </BrandRow>
             <Form>
@@ -353,7 +358,7 @@ export default function SignupScreen() {
                   <DividerLine />
                 </DividerRow>
                 <Label>Full name</Label>
-                <Field $focused={focused === "fullName"}>
+                <Field $focused={focused === "fullName"} $invalid={Boolean(fieldErrors.fullName)}>
                   <UserRound size={19} color={colors.inkMuted} />
                   <Input
                     accessibilityLabel="Full name"
@@ -362,13 +367,14 @@ export default function SignupScreen() {
                   value={details.fullName}
                     onChangeText={(value) => update("fullName", value)}
                     onFocus={() => setFocused("fullName")}
-                    onBlur={() => setFocused(null)}
+                    onBlur={() => { setFocused(null); validateDetailField("fullName"); }}
                     placeholder="Your name"
                     placeholderTextColor={colors.inkMuted}
                   />
                 </Field>
+                {fieldErrors.fullName ? <Hint $error accessibilityRole="alert">{fieldErrors.fullName}</Hint> : null}
                 <Label>Username</Label>
-                <Field $focused={focused === "username"}>
+                <Field $focused={focused === "username"} $invalid={Boolean(fieldErrors.username)}>
                   <AtSign size={19} color={colors.inkMuted} />
                   <Input
                     accessibilityLabel="Username"
@@ -380,14 +386,16 @@ export default function SignupScreen() {
                     value={details.username}
                     onChangeText={(value) => update("username", value)}
                     onFocus={() => setFocused("username")}
-                    onBlur={() => setFocused(null)}
+                    onBlur={() => { setFocused(null); validateDetailField("username"); }}
                     placeholder="your.username"
                     placeholderTextColor={colors.inkMuted}
                   />
                 </Field>
-                <Hint>{USERNAME_REQUIREMENTS}</Hint>
+                <Hint $error={Boolean(fieldErrors.username)} accessibilityRole={fieldErrors.username ? "alert" : undefined}>
+                  {fieldErrors.username ?? USERNAME_REQUIREMENTS}
+                </Hint>
                 <Label>Email</Label>
-                <Field $focused={focused === "email"}>
+                <Field $focused={focused === "email"} $invalid={Boolean(fieldErrors.email)}>
                   <Mail size={19} color={colors.inkMuted} />
                   <Input
                     accessibilityLabel="Signup email"
@@ -399,13 +407,31 @@ export default function SignupScreen() {
                     value={details.email}
                     onChangeText={(value) => update("email", value)}
                     onFocus={() => setFocused("email")}
-                    onBlur={() => setFocused(null)}
+                    onBlur={() => { setFocused(null); validateDetailField("email"); }}
                     placeholder="you@example.com"
                     placeholderTextColor={colors.inkMuted}
                   />
                 </Field>
+                {fieldErrors.email ? <Hint $error accessibilityRole="alert">{fieldErrors.email}</Hint> : null}
+                <Label>Birthdate</Label>
+                <BirthDateField
+                  disabled={busy}
+                  invalid={Boolean(fieldErrors.birthDateText)}
+                  value={birthDateText}
+                  onChangeText={(value) => {
+                    setBirthDateText(value);
+                    if (fieldErrors.birthDateText) {
+                      setFieldErrors((current) => ({ ...current, birthDateText: undefined }));
+                    }
+                    if (error) setError("");
+                  }}
+                  onBlur={() => validateDetailField("birthDateText")}
+                />
+                <Hint $error={Boolean(fieldErrors.birthDateText)} accessibilityRole={fieldErrors.birthDateText ? "alert" : undefined}>
+                  {fieldErrors.birthDateText ?? "Enter as DD/MM/YYYY or choose from the calendar."}
+                </Hint>
                 <Label>Password</Label>
-                <Field $focused={focused === "password"}>
+                <Field $focused={focused === "password"} $invalid={Boolean(fieldErrors.password)}>
                   <LockKeyhole size={19} color={colors.inkMuted} />
                   <Input
                     accessibilityLabel="Create password"
@@ -416,7 +442,7 @@ export default function SignupScreen() {
                     value={details.password}
                     onChangeText={(value) => update("password", value)}
                     onFocus={() => setFocused("password")}
-                    onBlur={() => setFocused(null)}
+                    onBlur={() => { setFocused(null); validateDetailField("password"); }}
                     placeholder="Create password"
                     placeholderTextColor={colors.inkMuted}
                   />
@@ -424,9 +450,11 @@ export default function SignupScreen() {
                     {showPassword ? <EyeOff size={19} color={colors.inkMuted} /> : <Eye size={19} color={colors.inkMuted} />}
                   </Pressable>
                 </Field>
-                <Hint>Minimum 6 characters with uppercase, number, and special character.</Hint>
+                <Hint $error={Boolean(fieldErrors.password)} accessibilityRole={fieldErrors.password ? "alert" : undefined}>
+                  {fieldErrors.password ?? "Minimum 6 characters with uppercase, number, and special character."}
+                </Hint>
                 <Label>Confirm password</Label>
-                <Field $focused={focused === "confirm"}>
+                <Field $focused={focused === "confirm"} $invalid={Boolean(fieldErrors.confirmPassword)}>
                   <LockKeyhole size={19} color={colors.inkMuted} />
                   <Input
                     accessibilityLabel="Confirm password"
@@ -435,17 +463,24 @@ export default function SignupScreen() {
                   editable={!busy}
                     secureTextEntry={!showPassword}
                     value={confirm}
-                    onChangeText={(value) => { setConfirm(value); if (error) setError(""); }}
+                    onChangeText={(value) => {
+                      setConfirm(value);
+                      if (fieldErrors.confirmPassword) {
+                        setFieldErrors((current) => ({ ...current, confirmPassword: undefined }));
+                      }
+                      if (error) setError("");
+                    }}
                     onFocus={() => setFocused("confirm")}
-                    onBlur={() => setFocused(null)}
+                    onBlur={() => { setFocused(null); validateDetailField("confirmPassword"); }}
                     onSubmitEditing={requestOtp}
                     placeholder="Repeat password"
                     placeholderTextColor={colors.inkMuted}
                   />
                 </Field>
+                {fieldErrors.confirmPassword ? <Hint $error accessibilityRole="alert">{fieldErrors.confirmPassword}</Hint> : null}
               </> : <CodeWrap>
                 <CodeIcon><ShieldCheck size={27} color={colors.brand} /></CodeIcon>
-                <OtpField $focused={focused === "otp"} $invalid={Boolean(error)}>
+                <OtpField $focused={focused === "otp"} $invalid={Boolean(fieldErrors.otp)}>
                   <OtpInput
                     accessibilityLabel="Verification OTP"
                     autoComplete="one-time-code"
@@ -453,7 +488,11 @@ export default function SignupScreen() {
                     keyboardType="number-pad"
                     maxLength={6}
                     value={otp}
-                    onChangeText={(value) => { setOtp(value.replace(/\D/g, "")); if (error) setError(""); }}
+                    onChangeText={(value) => {
+                      setOtp(value.replace(/\D/g, ""));
+                      if (fieldErrors.otp) setFieldErrors((current) => ({ ...current, otp: undefined }));
+                      if (error) setError("");
+                    }}
                     onFocus={() => setFocused("otp")}
                     onBlur={() => setFocused(null)}
                     onSubmitEditing={verifyOtp}
@@ -461,6 +500,7 @@ export default function SignupScreen() {
                     placeholderTextColor={colors.inkMuted}
                   />
                 </OtpField>
+                {fieldErrors.otp ? <Hint $error accessibilityRole="alert">{fieldErrors.otp}</Hint> : null}
               </CodeWrap>}
 
               {error ? <Hint $error accessibilityRole="alert">{error}</Hint> : null}

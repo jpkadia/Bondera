@@ -1,5 +1,5 @@
 import * as Clipboard from "expo-clipboard";
-import { Redirect, router } from "expo-router";
+import { Redirect, router, useFocusEffect } from "expo-router";
 import {
   Bell,
   Bot,
@@ -19,12 +19,13 @@ import {
   UsersRound,
   X,
 } from "lucide-react-native";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Modal, Pressable, RefreshControl, ScrollView, useWindowDimensions } from "react-native";
 import { styled } from "styled-components/native";
 
 import { Avatar } from "@/components/Avatar";
 import { AccountProfileModal } from "@/components/AccountProfileModal";
+import { BrandSymbol } from "@/components/BrandLogo";
 import { CategoryModal } from "@/components/CategoryModal";
 import { IconButton } from "@/components/IconButton";
 import { Notice } from "@/components/Notice";
@@ -32,6 +33,10 @@ import { useAuth } from "@/context/AuthContext";
 import { useNotification } from "@/context/NotificationContext";
 import { demoCategories, demoIncoming, demoOutgoing, demoUncategorized } from "@/data/demo";
 import { api, ApiError } from "@/services/api";
+import {
+  countUnreadConnections,
+  setConnectionUnreadCount,
+} from "@/services/read-state";
 import { RealtimeClient } from "@/services/socket";
 
 import { colors } from "@/theme";
@@ -60,15 +65,6 @@ const BrandRow = styled.View`
   gap: 10px;
 `;
 
-const BrandMark = styled.View`
-  width: 38px;
-  height: 38px;
-  align-items: center;
-  justify-content: center;
-  border-radius: 8px;
-  background-color: ${colors.brand};
-`;
-
 const BrandText = styled.Text`
   color: ${colors.ink};
   font-size: 21px;
@@ -79,6 +75,32 @@ const TopActions = styled.View`
   flex-direction: row;
   align-items: center;
   gap: 4px;
+`;
+
+const NotificationAction = styled.View`
+  position: relative;
+`;
+
+const NotificationBadge = styled.View`
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  z-index: 1;
+  min-width: 18px;
+  height: 18px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 4px;
+  border-width: 2px;
+  border-color: ${colors.surface};
+  border-radius: 9px;
+  background-color: ${colors.coral};
+`;
+
+const NotificationBadgeText = styled.Text`
+  color: ${colors.white};
+  font-size: 9px;
+  font-weight: 900;
 `;
 
 const Main = styled.View<{ $wide: boolean }>`
@@ -417,6 +439,7 @@ export default function HomeScreen() {
   const [categoryMode, setCategoryMode] = useState<"accept" | "set">("set");
   const [actionTarget, setActionTarget] = useState<Connection | null>(null);
   const [profileOpen, setProfileOpen] = useState(false);
+  const connectionsRef = useRef<Connection[]>([]);
 
   const load = useCallback(async () => {
     if (isDemo) {
@@ -428,41 +451,49 @@ export default function HomeScreen() {
     setIncoming(requests.incoming); setOutgoing(requests.outgoing);
   }, [isDemo]);
 
-  useEffect(() => {
-    if (isDemo) return;
-    let active = true;
-    void Promise.all([api.contacts(), api.requests()])
-      .then(([contacts, requests]) => {
-        if (!active) return;
-        setGroups(contacts.categories);
-        setUncategorized(contacts.uncategorized);
-        setIncoming(requests.incoming);
-        setOutgoing(requests.outgoing);
-      })
-      .catch((error) => {
-        if (active) setNotice({ message: error instanceof Error ? error.message : "Contacts could not be loaded.", error: true });
+  useFocusEffect(
+    useCallback(() => {
+      void load().catch((error) => {
+        setNotice({
+          message:
+            error instanceof Error
+              ? error.message
+              : "Contacts could not be loaded.",
+          error: true,
+        });
       });
-    return () => { active = false; };
-  }, [isDemo]);
+    }, [load]),
+  );
 
-  const { showNotification } = useNotification();
+  useEffect(() => {
+    connectionsRef.current = [
+      ...groups.Family,
+      ...groups.Friends,
+      ...groups.Professional,
+      ...uncategorized,
+    ];
+  }, [groups, uncategorized]);
+
+  const {
+    isConnectionVisible,
+    showAccountNotification,
+    showNotification,
+    showReactionNotification,
+  } = useNotification();
 
   useEffect(() => {
     if (!accessToken || !user || isDemo) return;
 
     realtime.connect(accessToken, {
+      onAccountBirthday: ({ title, body }) => showAccountNotification(title, body),
       onMessage: (message) => {
         if (message.senderId === user.id) return;
-        const allConnections = [
-          ...groups.Family,
-          ...groups.Friends,
-          ...groups.Professional,
-          ...uncategorized,
-        ];
-        const senderConn = allConnections.find(
+        const senderConn = connectionsRef.current.find(
           (c) => c.id === message.connectionId || c.otherUser.id === message.senderId,
         );
         const senderLabel = senderConn ? displayName(senderConn.otherUser) : "New message";
+
+        if (isConnectionVisible(message.connectionId)) return;
 
         const touch = (items: Connection[]) => items.map((connection) =>
           connection.id === message.connectionId
@@ -479,18 +510,44 @@ export default function HomeScreen() {
           Friends: touch(current.Friends),
           Professional: touch(current.Professional),
         }));
+        setUncategorized((current) => touch(current));
         showNotification(message, senderLabel);
       },
       onEdited: () => undefined,
       onDelivered: () => undefined,
       onSeen: () => undefined,
-      onReaction: () => undefined,
+      onUnreadCount: ({ connectionId, unreadCount }) => {
+        setGroups((current) => ({
+          Family: setConnectionUnreadCount(current.Family, connectionId, unreadCount),
+          Friends: setConnectionUnreadCount(current.Friends, connectionId, unreadCount),
+          Professional: setConnectionUnreadCount(
+            current.Professional,
+            connectionId,
+            unreadCount,
+          ),
+        }));
+        setUncategorized((current) =>
+          setConnectionUnreadCount(current, connectionId, unreadCount),
+        );
+      },
+      onReaction: ({ notification }) => {
+        if (notification) showReactionNotification(notification);
+      },
       onUnsent: () => undefined,
       onTyping: () => undefined,
     });
 
     return () => realtime.disconnect();
-  }, [accessToken, groups, isDemo, realtime, showNotification, uncategorized, user]);
+  }, [
+    accessToken,
+    isConnectionVisible,
+    isDemo,
+    realtime,
+    showAccountNotification,
+    showNotification,
+    showReactionNotification,
+    user,
+  ]);
 
 
   const refresh = async () => {
@@ -582,20 +639,38 @@ export default function HomeScreen() {
   };
 
   const activeContacts = useMemo(() => groups[activeCategory] ?? [], [activeCategory, groups]);
-  const unreadTotal = useMemo(
-    () => categories.reduce((sum, category) => sum + groups[category].reduce((groupSum, connection) => groupSum + connection.unreadCount, 0), 0),
-    [groups],
+  const unreadUserCount = useMemo(
+    () => countUnreadConnections([
+      ...groups.Family,
+      ...groups.Friends,
+      ...groups.Professional,
+      ...uncategorized,
+    ]),
+    [groups, uncategorized],
   );
   if (!user) return <Redirect href="/login" />;
 
   return (
     <Screen>
       <Topbar>
-        <BrandRow><BrandMark><MessageCircleMore size={22} color={colors.white} /></BrandMark><BrandText>Bondera</BrandText></BrandRow>
+        <BrandRow><BrandSymbol size={38} /><BrandText>Bondera</BrandText></BrandRow>
         <TopActions>
           <IconButton icon={Bot} label="Private AI" tone={user.isPremium || isDemo ? "soft" : "plain"} onPress={() => router.push("/ai")} />
           <IconButton icon={RefreshCw} label="Refresh" onPress={refresh} />
-          <IconButton icon={Bell} label="Requests and unread messages" tone={incoming.length || unreadTotal ? "soft" : "plain"} />
+          <NotificationAction>
+            <IconButton
+              icon={Bell}
+              label={`Notifications, ${unreadUserCount} unread ${unreadUserCount === 1 ? "chat" : "chats"}`}
+              tone={incoming.length || unreadUserCount ? "soft" : "plain"}
+            />
+            {unreadUserCount > 0 ? (
+              <NotificationBadge>
+                <NotificationBadgeText>
+                  {unreadUserCount > 99 ? "99+" : unreadUserCount}
+                </NotificationBadgeText>
+              </NotificationBadge>
+            ) : null}
+          </NotificationAction>
           <IconButton icon={LogOut} label="Sign out" onPress={async () => { await logout(); router.replace("/login"); }} />
         </TopActions>
       </Topbar>

@@ -10,7 +10,9 @@
     "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/server.js",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "jobs:birthday": "node dist/jobs/runBirthdayJob.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test:unit": "tsc src/utils/mediaLifecycle.ts src/utils/birthDate.ts src/utils/passwordResetToken.ts src/utils/birthdayAutomation.ts src/utils/premiumCapacity.ts src/utils/reactionNotification.ts --outDir node_modules/.cache/bondera-tests --module node16 --target es2022 --moduleResolution node16 --esModuleInterop --skipLibCheck && node --test tests/*.test.cjs"
   },
   "dependencies": {
     "@socket.io/redis-adapter": "^8.3.0",

@@ -1,17 +1,34 @@
 import { router } from "expo-router";
-import { MessageSquare, X } from "lucide-react-native";
+import { CakeSlice, Heart, MessageSquare, X } from "lucide-react-native";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Animated, Platform, Pressable } from "react-native";
 import { styled } from "styled-components/native";
 
 import { colors } from "@/theme";
-import type { ChatMessage } from "@/types/api";
+import type { ChatMessage, ReactionNotification } from "@/types/api";
 
-export interface InAppNotificationPayload {
+interface MessageNotificationPayload {
+  type: "message";
   message: ChatMessage;
   senderName?: string;
   senderAvatar?: string;
 }
+
+interface AccountNotificationPayload {
+  type: "account";
+  title: string;
+  body: string;
+}
+
+interface ReactionNotificationPayload {
+  type: "reaction";
+  reaction: ReactionNotification;
+}
+
+export type InAppNotificationPayload =
+  | MessageNotificationPayload
+  | AccountNotificationPayload
+  | ReactionNotificationPayload;
 
 interface InAppNotificationToastProps {
   notification: InAppNotificationPayload | null;
@@ -112,32 +129,55 @@ export function InAppNotificationToast({
   const handlePress = () => {
     if (!notification) return;
     handleDismiss();
+    if (notification.type === "account") return;
+    const connectionId = notification.type === "reaction"
+      ? notification.reaction.connectionId
+      : notification.message.connectionId;
     router.push({
       pathname: "/chat/[connectionId]",
       params: {
-        connectionId: notification.message.connectionId,
-        userId: notification.message.senderId,
-        username: notification.senderName ?? "user",
+        connectionId,
+        ...(notification.type === "message"
+          ? {
+              userId: notification.message.senderId,
+              username: notification.senderName ?? "user",
+            }
+          : {}),
       },
     });
   };
 
   if (!notification) return null;
 
-  const previewText =
-    notification.message.text ||
-    (notification.message.media?.length
-      ? `Sent ${notification.message.media.length} media file(s)`
-      : "New message");
+  const previewText = notification.type === "account"
+    ? notification.body
+    : notification.type === "reaction"
+      ? `${notification.reaction.emoji} ${notification.reaction.messagePreview}`
+      : notification.message.text ||
+        (notification.message.media?.length
+          ? `Sent ${notification.message.media.length} media file(s)`
+          : "New message");
 
   return (
     <ToastContainer style={{ transform: [{ translateY: slideAnim }] }}>
       <ToastCard onPress={handlePress}>
         <IconBadge>
-          <MessageSquare size={18} color={colors.white} />
+          {notification.type === "account" ? (
+            <CakeSlice size={18} color={colors.white} />
+          ) : notification.type === "reaction" ? (
+            <Heart size={18} color={colors.white} />
+          ) : (
+            <MessageSquare size={18} color={colors.white} />
+          )}
         </IconBadge>
         <Content>
-          <Sender>{notification.senderName || "New message"}</Sender>
+          <Sender>
+            {notification.type === "account"
+              ? notification.title
+              : notification.type === "reaction"
+                ? `${notification.reaction.reactorName} reacted to your message`
+                : notification.senderName || "New message"}
+          </Sender>
           <Body>{previewText}</Body>
         </Content>
         <CloseButton onPress={handleDismiss} hitSlop={10}>

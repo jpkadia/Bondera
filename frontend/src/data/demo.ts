@@ -7,6 +7,7 @@ export const demoUser: User = {
   email: "preview@bondera.local",
   username: "parth",
   fullName: "Parth Kadiya",
+  birthDate: "1995-01-01",
   uniqueId: "BONDERA612",
   isPremium: true,
 };

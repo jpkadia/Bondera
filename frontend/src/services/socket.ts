@@ -1,14 +1,17 @@
 import { io, type Socket } from "socket.io-client";
 
 import { SOCKET_URL } from "@/config";
-import type { ChatMessage, MessageReaction } from "@/types/api";
+import type { ChatMessage, MessageReaction, ReactionEvent } from "@/types/api";
 
 export interface RealtimeEvents {
+  onConnect?(): void;
+  onAccountBirthday?(payload: { title: string; body: string }): void;
   onMessage(message: ChatMessage): void;
   onEdited(message: ChatMessage): void;
   onDelivered(payload: { messageIds: string[]; deliveredAt: string }): void;
   onSeen(payload: { messageIds: string[]; seenAt: string }): void;
-  onReaction(payload: { messageId: string; reactions: MessageReaction[] }): void;
+  onUnreadCount(payload: { connectionId: string; unreadCount: number }): void;
+  onReaction(payload: ReactionEvent): void;
   onUnsent(payload: { messageId: string; deletedAt: string }): void;
   onTyping(userId: string, typing: boolean): void;
 }
@@ -23,10 +26,13 @@ export class RealtimeClient {
   connect(token: string, events: RealtimeEvents) {
     this.disconnect();
     this.socket = io(SOCKET_URL, { auth: { token }, transports: ["websocket", "polling"] });
+    this.socket.on("connect", () => events.onConnect?.());
+    this.socket.on("account:birthday", (payload) => events.onAccountBirthday?.(payload));
     this.socket.on("message:new", events.onMessage);
     this.socket.on("message:edited", events.onEdited);
     this.socket.on("messages:delivered", events.onDelivered);
     this.socket.on("messages:seen", events.onSeen);
+    this.socket.on("connection:unread", events.onUnreadCount);
     this.socket.on("message:reaction", events.onReaction);
     this.socket.on("message:unsent", events.onUnsent);
     this.socket.on("typing:start", ({ userId }) => events.onTyping(userId, true));

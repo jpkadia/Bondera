@@ -6,8 +6,10 @@
     adminEmail: null,
     loginEmail: null,
     activeView: "users",
-    pages: { users: 1, connections: 1, deleted: 1, audit: 1 },
-    search: ""
+    pages: { users: 1, premiumRequests: 1, connections: 1, deleted: 1, audit: 1 },
+    search: "",
+    premiumCount: 0,
+    premiumLimit: 3
   };
 
   function api(path, options) {
@@ -64,8 +66,7 @@
     $("#adminIdentity").text(session.email);
     $("#authView").addClass("hidden");
     $("#dashboardView").removeClass("hidden");
-    loadOverview();
-    loadView(state.activeView);
+    loadOverview().finally(function () { loadView(state.activeView); });
   }
 
   function formatDate(value) {
@@ -131,10 +132,13 @@
   }
 
   function loadOverview() {
-    api("/api/admin/overview").then(function (response) {
+    return api("/api/admin/overview").then(function (response) {
       var data = response.data;
+      state.premiumCount = data.premiumUsers;
+      state.premiumLimit = data.premiumLimit;
       $("#metricUsers").text(data.users);
       $("#metricPremium").text(data.premiumUsers + " / " + data.premiumLimit);
+      $("#metricPremiumRequests").text(data.pendingPremiumRequests);
       $("#metricRooms").text(data.rooms);
       $("#metricActiveRooms").text(data.activeRooms);
       $("#metricDeleted").text(data.deletedMessages);
@@ -165,6 +169,9 @@
           .attr("type", "button")
           .text(user.isPremium ? "Remove" : "Grant")
           .on("click", function () { togglePremium(user, !user.isPremium, action); });
+        if (!user.isPremium && state.premiumCount >= state.premiumLimit) {
+          action.prop("disabled", true).attr("title", "The three-account premium limit has been reached.");
+        }
         row.append($("<td>").append(action));
         body.append(row);
       });
@@ -179,11 +186,70 @@
       body: JSON.stringify({ isPremium: isPremium })
     }).then(function () {
       showToast(isPremium ? "Premium access granted." : "Premium access removed.");
-      loadUsers();
-      loadOverview();
+      loadOverview().then(loadUsers);
     }).catch(function (error) {
       button.prop("disabled", false);
       handleLoadError(error);
+    });
+  }
+
+  function decidePremiumRequest(request, decision, button) {
+    button.prop("disabled", true);
+    api("/api/admin/premium-requests/" + encodeURIComponent(request.id), {
+      method: "PATCH",
+      body: JSON.stringify({ decision: decision })
+    }).then(function () {
+      showToast(decision === "approved" ? "Premium request approved." : "Premium request rejected.");
+      loadOverview().then(function () {
+        loadPremiumRequests();
+        loadUsers();
+      });
+    }).catch(function (error) {
+      button.prop("disabled", false);
+      handleLoadError(error);
+    });
+  }
+
+  function loadPremiumRequests() {
+    var query = new URLSearchParams({ page: state.pages.premiumRequests, limit: 25 });
+    return api("/api/admin/premium-requests?" + query.toString()).then(function (response) {
+      var data = response.data;
+      var body = $("#premiumRequestsTable").empty();
+      $("#premiumRequestsCount").text(data.pagination.total + " records");
+      if (!data.items.length) body.append(emptyRow(5, "No premium requests found."));
+      data.items.forEach(function (request) {
+        var row = $("<tr>");
+        row.append(primaryCell(
+          request.user.fullName || "No full name",
+          "@" + request.user.username + " | " + request.user.email
+        ));
+        row.append($("<td>").text(request.user.uniqueId));
+        row.append($("<td>").append(badge(request.status, request.status === "approved" ? "good" : request.status === "pending" ? "warn" : "danger")));
+        row.append($("<td>").text(formatDate(request.requestedAt)));
+        var actions = $("<div>").addClass("request-actions");
+        if (request.status === "pending") {
+          var approveButton = $("<button>")
+            .addClass("premium-button")
+            .attr("type", "button")
+            .text("Approve")
+            .on("click", function () { decidePremiumRequest(request, "approved", $(this)); });
+          if (state.premiumCount >= state.premiumLimit) {
+            approveButton.prop("disabled", true).attr("title", "The three-account premium limit has been reached.");
+          }
+          approveButton.appendTo(actions);
+          $("<button>")
+            .addClass("premium-button remove")
+            .attr("type", "button")
+            .text("Reject")
+            .on("click", function () { decidePremiumRequest(request, "rejected", $(this)); })
+            .appendTo(actions);
+        } else {
+          actions.text(formatDate(request.decidedAt));
+        }
+        row.append($("<td>").append(actions));
+        body.append(row);
+      });
+      renderPagination("#premiumRequestsPagination", "premiumRequests", data.pagination);
     });
   }
 
@@ -329,7 +395,7 @@
   }
 
   function loadView(view) {
-    var loaders = { users: loadUsers, connections: loadConnections, deleted: loadDeleted, openai: loadOpenAiUsage, audit: loadAudit };
+    var loaders = { users: loadUsers, premiumRequests: loadPremiumRequests, connections: loadConnections, deleted: loadDeleted, openai: loadOpenAiUsage, audit: loadAudit };
     return loaders[view]().catch(handleLoadError);
   }
 

@@ -3,7 +3,10 @@ import { Types } from "mongoose";
 import { UserModel } from "../models/User";
 import type { AuthenticatedRequest } from "../types/http";
 import { AppError } from "../utils/errors";
-import { verifyAccessToken } from "../services/token.service";
+import {
+  isAuthTokenCurrent,
+  verifyAccessToken
+} from "../services/token.service";
 
 export const authenticate = async (
   req: AuthenticatedRequest,
@@ -18,9 +21,12 @@ export const authenticate = async (
     }
 
     const payload = verifyAccessToken(authorization.slice(7).trim());
-    const user = await UserModel.findOne({ _id: payload.sub, status: "active" });
+    const user = await UserModel.findOne({
+      _id: payload.sub,
+      status: "active"
+    }).select("+authVersion");
 
-    if (!user) {
+    if (!user || !isAuthTokenCurrent(payload, user.authVersion)) {
       throw new AppError(401, "USER_NOT_AVAILABLE", "The authenticated user is unavailable.");
     }
 
@@ -30,10 +36,30 @@ export const authenticate = async (
       email: user.email,
       username: user.username,
       uniqueId: user.uniqueId,
+      birthDate: user.birthDate,
       isPremium: user.isPremium
     };
     next();
   } catch (error) {
     next(error);
   }
+};
+
+export const requireBirthDate = (
+  req: AuthenticatedRequest,
+  _res: Response,
+  next: NextFunction
+): void => {
+  if (!req.user?.birthDate) {
+    next(
+      new AppError(
+        403,
+        "BIRTH_DATE_REQUIRED",
+        "Add your birthdate before using Bondera chat."
+      )
+    );
+    return;
+  }
+
+  next();
 };

@@ -4,30 +4,43 @@
     "slug": "jp-kadiya",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/images/icon.png",
+    "icon": "./assets/brand/app-icon.png",
     "scheme": "bondera",
     "userInterfaceStyle": "light",
+    "backgroundColor": "#F5F8FA",
+    "primaryColor": "#041C4A",
     "ios": {
-      "icon": "./assets/expo.icon",
+      "icon": "./assets/brand/app-icon.png",
       "bundleIdentifier": "com.bondera.app"
     },
     "android": {
       "package": "com.bondera.app",
       "adaptiveIcon": {
-        "backgroundColor": "#DDECE5",
-        "foregroundImage": "./assets/images/android-icon-foreground.png",
-        "backgroundImage": "./assets/images/android-icon-background.png",
-        "monochromeImage": "./assets/images/android-icon-monochrome.png"
+        "backgroundColor": "#E5FAF9",
+        "foregroundImage": "./assets/brand/adaptive-foreground.png",
+        "monochromeImage": "./assets/brand/adaptive-monochrome.png"
       },
       "predictiveBackGestureEnabled": false
     },
     "web": {
       "output": "static",
-      "favicon": "./assets/images/favicon.png"
+      "favicon": "./assets/brand/favicon.png",
+      "name": "Bondera",
+      "shortName": "Bondera",
+      "lang": "en",
+      "themeColor": "#041C4A"
     },
     "plugins": [
       "expo-router",
       "expo-secure-store",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/brand/notification-icon.png",
+          "color": "#04B9B4",
+          "defaultChannel": "messages"
+        }
+      ],
       [
         "expo-image-picker",
         {
@@ -39,9 +52,10 @@
       [
         "expo-splash-screen",
         {
-          "backgroundColor": "#176B4D",
-          "image": "./assets/images/splash-icon.png",
-          "imageWidth": 76
+          "backgroundColor": "#F5F8FA",
+          "image": "./assets/brand/splash-logo.png",
+          "imageWidth": 220,
+          "resizeMode": "contain"
         }
       ]
     ],

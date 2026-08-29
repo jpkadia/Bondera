@@ -4,7 +4,8 @@ export type AdminAuditAction =
   | "admin_login"
   | "admin_logout"
   | "premium_granted"
-  | "premium_revoked";
+  | "premium_revoked"
+  | "premium_request_rejected";
 
 export interface AdminAuditLog {
   actorEmail: string;
@@ -29,7 +30,13 @@ const adminAuditLogSchema = new Schema(
     action: {
       type: String,
       required: true,
-      enum: ["admin_login", "admin_logout", "premium_granted", "premium_revoked"],
+      enum: [
+        "admin_login",
+        "admin_logout",
+        "premium_granted",
+        "premium_revoked",
+        "premium_request_rejected"
+      ],
       index: true
     },
     targetUser: {

@@ -6,6 +6,7 @@ import { AppError } from "../utils/errors";
 
 export interface AuthTokenPayload extends JwtPayload {
   type: "access" | "refresh";
+  version: number;
 }
 
 const commonSignOptions = {
@@ -20,7 +21,7 @@ const signToken = (
   expiresIn: SignOptions["expiresIn"]
 ): string => {
   return jwt.sign(
-    { type },
+    { type, version: user.authVersion ?? 0 },
     secret,
     {
       ...commonSignOptions,
@@ -59,12 +60,17 @@ const verifyToken = (
     if (
       typeof payload === "string" ||
       payload.type !== expectedType ||
-      typeof payload.sub !== "string"
+      typeof payload.sub !== "string" ||
+      (payload.version !== undefined &&
+        (!Number.isInteger(payload.version) || payload.version < 0))
     ) {
       throw new Error("Unexpected token payload.");
     }
 
-    return payload as AuthTokenPayload;
+    return {
+      ...(payload as AuthTokenPayload),
+      version: typeof payload.version === "number" ? payload.version : 0
+    };
   } catch {
     throw new AppError(401, "TOKEN_INVALID", "The authentication token is invalid or expired.");
   }
@@ -75,3 +81,8 @@ export const verifyAccessToken = (token: string): AuthTokenPayload =>
 
 export const verifyRefreshToken = (token: string): AuthTokenPayload =>
   verifyToken(token, env.JWT_REFRESH_SECRET, "refresh");
+
+export const isAuthTokenCurrent = (
+  payload: AuthTokenPayload,
+  userAuthVersion: number | undefined
+): boolean => payload.version === (userAuthVersion ?? 0);

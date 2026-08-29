@@ -3,6 +3,10 @@ import { app } from "./app";
 import { env } from "./config/env";
 import { connectDatabase, disconnectDatabase } from "./database/mongoose";
 import {
+  startCloudinaryCleanupWorker,
+  stopCloudinaryCleanupWorker
+} from "./services/cloudinaryCleanup.service";
+import {
   closeSocketServer,
   initializeSocketServer
 } from "./socket/socketServer";
@@ -11,6 +15,7 @@ const server = http.createServer(app);
 
 const startServer = async (): Promise<void> => {
   await connectDatabase();
+  startCloudinaryCleanupWorker();
   await initializeSocketServer(server);
 
   server.listen(env.PORT, () => {
@@ -20,6 +25,7 @@ const startServer = async (): Promise<void> => {
 
 const shutdown = async (signal: NodeJS.Signals): Promise<void> => {
   console.log(`${signal} received. Closing Bondera API.`);
+  stopCloudinaryCleanupWorker();
   await closeSocketServer();
 
   if (server.listening) {

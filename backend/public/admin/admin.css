@@ -40,7 +40,7 @@ label.error { display: block; margin-top: 5px; color: #a52f27; font-size: 12px; 
 .topbar-brand strong, .topbar-brand span { display: block; }
 .topbar-brand > div > span { margin-top: 2px; color: #bdc7c0; font-size: 12px; }
 .overview-band { background: #ffffff; border-bottom: 1px solid #d9ddd8; }
-.overview-inner { max-width: 1500px; margin: 0 auto; padding: 18px 28px; display: grid; grid-template-columns: repeat(5, minmax(120px, 1fr)); }
+.overview-inner { max-width: 1500px; margin: 0 auto; padding: 18px 28px; display: grid; grid-template-columns: repeat(6, minmax(120px, 1fr)); }
 .metric { padding: 4px 20px; border-right: 1px solid #e1e4e1; }
 .metric:first-child { padding-left: 0; }
 .metric:last-child { border-right: 0; }
@@ -69,6 +69,7 @@ tbody tr:hover { background: #fafbf9; }
 .badge.danger { background: #f4dfdc; color: #97372f; }
 .premium-button { min-width: 116px; background: #e3f0e8; color: #176b4d; border: 1px solid #b8d8c7; }
 .premium-button.remove { background: #fff4dd; color: #72540e; border-color: #e5cb91; }
+.request-actions { display: flex; align-items: center; gap: 8px; }
 .pagination { min-height: 54px; padding: 10px 16px; display: flex; align-items: center; justify-content: flex-end; gap: 10px; border-top: 1px solid #dfe3df; }
 .pagination span { color: #656c67; font-size: 12px; }
 .empty-row { padding: 32px; color: #757c77; text-align: center; }

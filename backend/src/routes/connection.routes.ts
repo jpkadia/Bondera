@@ -9,7 +9,7 @@ import {
   sendConnectionRequest,
   setConnectionCategory
 } from "../controllers/connection.controller";
-import { authenticate } from "../middleware/authenticate";
+import { authenticate, requireBirthDate } from "../middleware/authenticate";
 import { validateBody, validateParams } from "../middleware/validateRequest";
 import { asyncHandler } from "../utils/asyncHandler";
 import {
@@ -33,6 +33,7 @@ const requestLimiter = rateLimit({
 });
 
 connectionRouter.use(asyncHandler(authenticate));
+connectionRouter.use(requireBirthDate);
 
 connectionRouter.get("/", asyncHandler(listContacts));
 connectionRouter.get("/requests", asyncHandler(listConnectionRequests));

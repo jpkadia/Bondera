@@ -4,9 +4,12 @@ import {
   authenticateGoogleToken,
   googleCallback,
   login,
+  requestPasswordResetOtp,
   refreshSession,
+  resetPassword,
   requestSignupOtp,
   startGoogleAuth,
+  verifyPasswordResetOtp,
   verifySignup
 } from "../controllers/auth.controller";
 import { validateBody } from "../middleware/validateRequest";
@@ -14,8 +17,11 @@ import { asyncHandler } from "../utils/asyncHandler";
 import {
   googleTokenSchema,
   loginSchema,
+  requestPasswordResetOtpSchema,
   refreshTokenSchema,
+  resetPasswordSchema,
   requestSignupOtpSchema,
+  verifyPasswordResetOtpSchema,
   verifySignupSchema
 } from "../validation/auth.validation";
 
@@ -63,6 +69,24 @@ authRouter.post(
   loginLimiter,
   validateBody(loginSchema),
   asyncHandler(login)
+);
+authRouter.post(
+  "/password/forgot/request-otp",
+  otpRequestLimiter,
+  validateBody(requestPasswordResetOtpSchema),
+  asyncHandler(requestPasswordResetOtp)
+);
+authRouter.post(
+  "/password/forgot/verify-otp",
+  loginLimiter,
+  validateBody(verifyPasswordResetOtpSchema),
+  asyncHandler(verifyPasswordResetOtp)
+);
+authRouter.post(
+  "/password/forgot/reset",
+  loginLimiter,
+  validateBody(resetPasswordSchema),
+  asyncHandler(resetPassword)
 );
 authRouter.post(
   "/refresh",

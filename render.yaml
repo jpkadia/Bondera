@@ -28,6 +28,10 @@ services:
         value: 30d
       - key: BCRYPT_SALT_ROUNDS
         value: 12
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
       - key: GOOGLE_CLIENT_ID
         sync: false
       - key: GOOGLE_CLIENT_SECRET
@@ -66,3 +70,5 @@ services:
         value: 100000
       - key: AI_MAX_OUTPUT_TOKENS
         value: 1000
+      - key: BIRTHDAY_JOB_SECRET
+        sync: false
