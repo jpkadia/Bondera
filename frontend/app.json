@@ -23,7 +23,7 @@
       "predictiveBackGestureEnabled": false
     },
     "web": {
-      "output": "static",
+      "output": "single",
       "favicon": "./assets/brand/favicon.png",
       "name": "Bondera",
       "shortName": "Bondera",
