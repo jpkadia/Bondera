@@ -4,15 +4,27 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="robots" content="noindex,nofollow">
+    <meta name="theme-color" content="#041C4A">
     <title>Bondera Admin</title>
-    <link rel="stylesheet" href="/admin/assets/admin.css">
+    <link rel="icon" type="image/png" href="/admin/assets/favicon.png">
+    <link rel="apple-touch-icon" href="/admin/assets/bondera-symbol.png">
+    <link rel="stylesheet" href="/admin/assets/admin.css?v=2">
   </head>
   <body>
     <main id="authView" class="auth-shell">
       <section class="auth-panel" aria-labelledby="authTitle">
-        <div class="brand-mark" aria-hidden="true">B</div>
-        <p class="brand-name">Bondera</p>
-        <h1 id="authTitle">Admin access</h1>
+        <div class="auth-brand">
+          <img
+            class="auth-wordmark"
+            src="/admin/assets/bondera-wordmark.png"
+            alt="Bondera"
+            width="210"
+            height="181"
+          >
+          <span class="admin-label">Admin console</span>
+        </div>
+        <h1 id="authTitle">Welcome back</h1>
+        <p class="auth-copy">Sign in with your administrator credentials to manage Bondera.</p>
 
         <form id="loginForm" method="post" action="/admin" novalidate>
           <div class="field">
@@ -42,7 +54,9 @@
     <div id="dashboardView" class="dashboard hidden">
       <header class="topbar">
         <div class="topbar-brand">
-          <span class="brand-mark compact" aria-hidden="true">B</span>
+          <span class="brand-symbol-wrap" aria-hidden="true">
+            <img class="brand-symbol" src="/admin/assets/bondera-symbol.png" alt="">
+          </span>
           <div>
             <strong>Bondera Admin</strong>
             <span id="adminIdentity"></span>
