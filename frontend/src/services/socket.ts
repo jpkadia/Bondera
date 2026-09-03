@@ -5,6 +5,7 @@ import type { ChatMessage, MessageReaction, ReactionEvent } from "@/types/api";
 
 export interface RealtimeEvents {
   onConnect?(): void;
+  onDisconnect?(): void;
   onAccountBirthday?(payload: { title: string; body: string }): void;
   onMessage(message: ChatMessage): void;
   onEdited(message: ChatMessage): void;
@@ -27,6 +28,7 @@ export class RealtimeClient {
     this.disconnect();
     this.socket = io(SOCKET_URL, { auth: { token }, transports: ["websocket", "polling"] });
     this.socket.on("connect", () => events.onConnect?.());
+    this.socket.on("disconnect", () => events.onDisconnect?.());
     this.socket.on("account:birthday", (payload) => events.onAccountBirthday?.(payload));
     this.socket.on("message:new", events.onMessage);
     this.socket.on("message:edited", events.onEdited);
@@ -73,6 +75,9 @@ export class RealtimeClient {
   }
 
   typing(recipientId: string, active: boolean) {
-    this.socket?.emit(active ? "typing:start" : "typing:stop", { recipientId });
+    this.socket?.volatile.emit(
+      active ? "typing:start" : "typing:stop",
+      { recipientId },
+    );
   }
 }

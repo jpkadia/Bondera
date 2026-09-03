@@ -1,5 +1,6 @@
 import { BriefcaseBusiness, House, UsersRound, X } from "lucide-react-native";
-import { Modal, Pressable } from "react-native";
+import { Modal, Pressable, ScrollView, useWindowDimensions } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { styled } from "styled-components/native";
 
 import { IconButton } from "@/components/IconButton";
@@ -7,7 +8,7 @@ import { colors } from "@/theme";
 import type { Category, Connection } from "@/types/api";
 import { displayName } from "@/utils/format";
 
-const Backdrop = styled.View`
+const Backdrop = styled(SafeAreaView)`
   flex: 1;
   align-items: center;
   justify-content: center;
@@ -15,13 +16,12 @@ const Backdrop = styled.View`
   background-color: ${colors.overlay};
 `;
 
-const Dialog = styled.View`
+const Dialog = styled.View<{ $maxHeight: number }>`
   width: 100%;
   max-width: 420px;
+  max-height: ${({ $maxHeight }) => $maxHeight}px;
   border-radius: 8px;
   background-color: ${colors.surface};
-  padding: 20px;
-  gap: 16px;
 `;
 
 const Header = styled.View`
@@ -94,40 +94,48 @@ export function CategoryModal({ connection, visible, selected, busy, onSelect, o
   onConfirm(): void;
   onClose(): void;
 }) {
+  const { height } = useWindowDimensions();
+
   return (
     <Modal transparent visible={visible} animationType="fade" onRequestClose={onClose}>
       <Backdrop>
-        <Dialog accessibilityViewIsModal>
-          <Header>
-            <TitleBlock>
-              <Title>Choose a circle</Title>
-              <Subtitle>{connection ? `Set how ${displayName(connection.otherUser)} appears in your contacts.` : "Select a category."}</Subtitle>
-            </TitleBlock>
-            <IconButton icon={X} label="Close" onPress={onClose} />
-          </Header>
-          <Options>
-            {categories.map(({ value, icon: Icon }) => (
-              <Option key={value} $selected={selected === value} onPress={() => onSelect(value)}>
-                <OptionIcon><Icon size={19} color={colors.ink} /></OptionIcon>
-                <OptionText>{value}</OptionText>
-              </Option>
-            ))}
-          </Options>
-          <Pressable
-            accessibilityRole="button"
-            disabled={!selected || busy}
-            onPress={onConfirm}
-            style={({ pressed }) => ({
-              minHeight: 48,
-              alignItems: "center",
-              justifyContent: "center",
-              borderRadius: 8,
-              backgroundColor: selected ? colors.brand : colors.border,
-              opacity: pressed || busy ? 0.75 : 1,
-            })}
+        <Dialog $maxHeight={Math.max(240, height - 40)} accessibilityViewIsModal>
+          <ScrollView
+            bounces={false}
+            contentContainerStyle={{ gap: 16, padding: 20 }}
+            showsVerticalScrollIndicator={false}
           >
-            <OptionText style={{ color: colors.white }}>{busy ? "Saving..." : "Confirm category"}</OptionText>
-          </Pressable>
+            <Header>
+              <TitleBlock>
+                <Title>Choose a circle</Title>
+                <Subtitle>{connection ? `Set how ${displayName(connection.otherUser)} appears in your contacts.` : "Select a category."}</Subtitle>
+              </TitleBlock>
+              <IconButton icon={X} label="Close" onPress={onClose} />
+            </Header>
+            <Options>
+              {categories.map(({ value, icon: Icon }) => (
+                <Option key={value} $selected={selected === value} onPress={() => onSelect(value)}>
+                  <OptionIcon><Icon size={19} color={colors.ink} /></OptionIcon>
+                  <OptionText>{value}</OptionText>
+                </Option>
+              ))}
+            </Options>
+            <Pressable
+              accessibilityRole="button"
+              disabled={!selected || busy}
+              onPress={onConfirm}
+              style={({ pressed }) => ({
+                minHeight: 48,
+                alignItems: "center",
+                justifyContent: "center",
+                borderRadius: 8,
+                backgroundColor: selected ? colors.brand : colors.border,
+                opacity: pressed || busy ? 0.75 : 1,
+              })}
+            >
+              <OptionText style={{ color: colors.white }}>{busy ? "Saving..." : "Confirm category"}</OptionText>
+            </Pressable>
+          </ScrollView>
         </Dialog>
       </Backdrop>
     </Modal>

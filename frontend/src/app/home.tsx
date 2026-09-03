@@ -21,6 +21,7 @@ import {
 } from "lucide-react-native";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Modal, Pressable, RefreshControl, ScrollView, useWindowDimensions } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { styled } from "styled-components/native";
 
 import { Avatar } from "@/components/Avatar";
@@ -43,35 +44,39 @@ import { colors } from "@/theme";
 import type { Category, Connection } from "@/types/api";
 import { displayName, relativeTime } from "@/utils/format";
 
-const Screen = styled.SafeAreaView`
+const Screen = styled(SafeAreaView)`
   flex: 1;
   background-color: ${colors.canvas};
 `;
 
-const Topbar = styled.View`
+const Topbar = styled.View<{ $compact: boolean }>`
   min-height: 68px;
   flex-direction: row;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 20px;
+  gap: ${({ $compact }) => ($compact ? 6 : 12)}px;
+  padding: ${({ $compact }) => ($compact ? "8px 10px" : "10px 20px")};
   border-bottom-width: 1px;
   border-bottom-color: ${colors.border};
   background-color: ${colors.surface};
 `;
 
 const BrandRow = styled.View`
+  min-width: 0;
+  flex-shrink: 1;
   flex-direction: row;
   align-items: center;
   gap: 10px;
 `;
 
-const BrandText = styled.Text`
+const BrandText = styled.Text.attrs({ numberOfLines: 1 })`
   color: ${colors.ink};
   font-size: 21px;
   font-weight: 900;
 `;
 
 const TopActions = styled.View`
+  flex-shrink: 0;
   flex-direction: row;
   align-items: center;
   gap: 4px;
@@ -371,7 +376,7 @@ const EmptyText = styled.Text`
   text-align: center;
 `;
 
-const ModalBackdrop = styled.View`
+const ModalBackdrop = styled(SafeAreaView)`
   flex: 1;
   align-items: center;
   justify-content: center;
@@ -421,7 +426,8 @@ const emptyGroups = (): Record<Category, Connection[]> => ({
 
 export default function HomeScreen() {
   const { width } = useWindowDimensions();
-  const wide = width >= 820;
+  const compact = width < 390;
+  const wide = width >= 900;
   const { user, accessToken, isDemo, logout } = useAuth();
   const [realtime] = useState(() => new RealtimeClient());
   const [groups, setGroups] = useState<Record<Category, Connection[]>>(() => isDemo ? demoCategories : emptyGroups());
@@ -652,8 +658,11 @@ export default function HomeScreen() {
 
   return (
     <Screen>
-      <Topbar>
-        <BrandRow><BrandSymbol size={38} /><BrandText>Bondera</BrandText></BrandRow>
+      <Topbar $compact={compact}>
+        <BrandRow>
+          <BrandSymbol size={38} />
+          {!compact ? <BrandText>Bondera</BrandText> : null}
+        </BrandRow>
         <TopActions>
           <IconButton icon={Bot} label="Private AI" tone={user.isPremium || isDemo ? "soft" : "plain"} onPress={() => router.push("/ai")} />
           <IconButton icon={RefreshCw} label="Refresh" onPress={refresh} />

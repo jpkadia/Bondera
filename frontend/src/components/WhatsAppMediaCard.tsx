@@ -18,6 +18,7 @@ import {
   Platform,
   Pressable,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 
 import { styled } from "styled-components/native";
 
@@ -199,7 +200,7 @@ const SmallActionText = styled.Text<{ $mine: boolean }>`
   font-weight: 700;
 `;
 
-const FullscreenBackdrop = styled.View`
+const FullscreenBackdrop = styled(SafeAreaView)`
   flex: 1;
   background-color: rgba(0, 0, 0, 0.92);
   align-items: center;

@@ -42,11 +42,13 @@ import {
   useWindowDimensions,
 } from "react-native";
 import type { NativeScrollEvent, NativeSyntheticEvent } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { styled } from "styled-components/native";
 
 import { Avatar } from "@/components/Avatar";
 import { IconButton } from "@/components/IconButton";
 import { Notice } from "@/components/Notice";
+import { TypingIndicator } from "@/components/TypingIndicator";
 import { WhatsAppMediaCard } from "@/components/WhatsAppMediaCard";
 import { useAuth } from "@/context/AuthContext";
 import { useNotification } from "@/context/NotificationContext";
@@ -64,6 +66,10 @@ import {
 } from "@/services/read-state";
 import { shouldShowMessageAction } from "@/services/message-actions";
 import { RealtimeClient } from "@/services/socket";
+import {
+  REMOTE_TYPING_STALE_TIMEOUT_MS,
+  TypingSignalController,
+} from "@/services/typing-state";
 import { colors } from "@/theme";
 import type { ChatMessage, Connection, MessageReaction, PublicUser } from "@/types/api";
 import {
@@ -93,7 +99,7 @@ interface SelectedFile {
   file?: File;
 }
 
-const Screen = styled.SafeAreaView`
+const Screen = styled(SafeAreaView)`
   flex: 1;
   background-color: ${colors.canvas};
 `;
@@ -381,7 +387,7 @@ const EmptyText = styled.Text`
   font-size: 14px;
 `;
 
-const Backdrop = styled.View`
+const Backdrop = styled(SafeAreaView)`
   flex: 1;
   align-items: center;
   justify-content: center;
@@ -412,9 +418,10 @@ const DialogHeader = styled.View`
 
 const ReactionBar = styled.View`
   flex-direction: row;
+  flex-wrap: wrap;
   align-items: center;
-  justify-content: space-between;
-  gap: 4px;
+  justify-content: center;
+  gap: 8px;
 `;
 
 const EmojiButton = styled(Pressable)<{ $active: boolean }>`
@@ -520,7 +527,8 @@ export default function ChatScreen() {
   const inputSelection = useRef({ start: 0, end: 0 });
   const { getMappingKey } = useMappingHelper();
   const [realtime] = useState(() => new RealtimeClient());
-  const typingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const localTypingController = useRef<TypingSignalController | null>(null);
+  const remoteTypingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const initialScrollDone = useRef(false);
   const isNearBottom = useRef(true);
   const pendingBottomScroll = useRef<boolean | null>(null);
@@ -558,6 +566,19 @@ export default function ChatScreen() {
       typeof document === "undefined" ||
       document.visibilityState === "visible",
   );
+  const setRemoteTyping = useCallback((active: boolean) => {
+    if (remoteTypingTimer.current) {
+      clearTimeout(remoteTypingTimer.current);
+      remoteTypingTimer.current = null;
+    }
+    setTyping(active);
+    if (active) {
+      remoteTypingTimer.current = setTimeout(() => {
+        remoteTypingTimer.current = null;
+        setTyping(false);
+      }, REMOTE_TYPING_STALE_TIMEOUT_MS);
+    }
+  }, []);
   const loading = loadedConnectionId !== params.connectionId;
   const firstUnreadIndex = useMemo(
     () => findFirstUnreadIndex(messages, firstUnreadMessageId),
@@ -873,11 +894,19 @@ export default function ChatScreen() {
 
   useEffect(() => {
     if (!accessToken || !user || !otherUser.id) return;
+    const typingController = new TypingSignalController((active) =>
+      realtime.typing(otherUser.id, active),
+    );
+    localTypingController.current = typingController;
     realtime.connect(accessToken, {
-      onConnect: () =>
-        requestAnimationFrame(() => acknowledgeSeenRef.current()),
+      onConnect: () => {
+        typingController.reset();
+        requestAnimationFrame(() => acknowledgeSeenRef.current());
+      },
+      onDisconnect: () => setRemoteTyping(false),
       onMessage: (message) => {
         if (message.connectionId === params.connectionId) {
+          if (message.senderId === otherUser.id) setRemoteTyping(false);
           const shouldFollow = message.senderId === user.id || isNearBottom.current;
           if (shouldFollow) {
             followNextMessage(true);
@@ -920,30 +949,31 @@ export default function ChatScreen() {
           ),
         ),
       onTyping: (userId, active) => {
-        if (userId === otherUser.id) setTyping(active);
+        if (userId === otherUser.id) setRemoteTyping(active);
       },
     });
-    return () => realtime.disconnect();
+    return () => {
+      typingController.dispose();
+      if (localTypingController.current === typingController) {
+        localTypingController.current = null;
+      }
+      setRemoteTyping(false);
+      realtime.disconnect();
+    };
   }, [
     accessToken,
     followNextMessage,
     otherUser.id,
     params.connectionId,
     realtime,
+    setRemoteTyping,
     updateReceipts,
     user,
   ]);
 
   const updateText = (value: string) => {
     setText(value);
-    if (!isDemo) {
-      realtime.typing(otherUser.id, Boolean(value.trim()));
-      if (typingTimer.current) clearTimeout(typingTimer.current);
-      typingTimer.current = setTimeout(
-        () => realtime.typing(otherUser.id, false),
-        1200,
-      );
-    }
+    if (!isDemo) localTypingController.current?.update(value);
   };
 
   const insertEmoji = ({ emoji }: EmojiSelection) => {
@@ -1016,6 +1046,7 @@ export default function ChatScreen() {
   const sendMessage = async () => {
     const body = text.trim();
     if ((!body && !files.length) || sending || !user) return;
+    localTypingController.current?.stop();
     if (editing) {
       setSending(true);
       try {
@@ -1114,7 +1145,6 @@ export default function ChatScreen() {
       }
       followNextMessage(true);
       setMessages((items) => mergeMessage(items, message));
-      realtime.typing(otherUser.id, false);
     } catch (error) {
       setText(body);
       setFiles(queuedFiles);
@@ -1402,6 +1432,7 @@ export default function ChatScreen() {
             </NewMessagesButton>
           ) : null}
         </Messages>
+        {typing ? <TypingIndicator user={otherUser} /> : null}
         <ComposerArea>
           {files.length ? (
             <FileStrip
@@ -1485,7 +1516,10 @@ export default function ChatScreen() {
                 setFocused(true);
                 if (isNearBottom.current) scrollToBottom(true);
               }}
-              onBlur={() => setFocused(false)}
+              onBlur={() => {
+                setFocused(false);
+                localTypingController.current?.stop();
+              }}
               onKeyPress={handleInputKeyPress}
               placeholder="Type Message"
               placeholderTextColor={colors.inkMuted}
@@ -1506,7 +1540,7 @@ export default function ChatScreen() {
           </Composer>
           {emojiPickerOpen ? (
             <EmojiPanel
-              style={{ height: Math.min(400, Math.max(300, height * 0.46)) }}
+              style={{ height: Math.min(400, Math.max(180, height * 0.46)) }}
             >
               <EmojiPanelHeader>
                 <EmojiPanelTitle>Emojis</EmojiPanelTitle>

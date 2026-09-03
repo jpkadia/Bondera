@@ -1,6 +1,10 @@
 import { router, Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { useEffect } from "react";
+import {
+  initialWindowMetrics,
+  SafeAreaProvider,
+} from "react-native-safe-area-context";
 import { ThemeProvider } from "styled-components/native";
 
 import { AuthProvider, useAuth } from "@/context/AuthContext";
@@ -10,14 +14,16 @@ import { theme } from "@/theme";
 
 export default function RootLayout() {
   return (
-    <ThemeProvider theme={theme}>
-      <AuthProvider>
-        <NotificationProvider>
-          <StatusBar style="dark" />
-          <RootNavigator />
-        </NotificationProvider>
-      </AuthProvider>
-    </ThemeProvider>
+    <SafeAreaProvider initialMetrics={initialWindowMetrics}>
+      <ThemeProvider theme={theme}>
+        <AuthProvider>
+          <NotificationProvider>
+            <StatusBar style="dark" />
+            <RootNavigator />
+          </NotificationProvider>
+        </AuthProvider>
+      </ThemeProvider>
+    </SafeAreaProvider>
   );
 }
 

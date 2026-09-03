@@ -12,6 +12,7 @@ import {
   type GestureResponderEvent,
   useWindowDimensions,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { styled } from "styled-components/native";
 
 import {
@@ -43,20 +44,20 @@ interface ProfilePhotoCropModalProps {
   onConfirm(photo: CroppedProfilePhoto): Promise<void> | void;
 }
 
-const Backdrop = styled.View`
+const Backdrop = styled(SafeAreaView)<{ $compact: boolean }>`
   flex: 1;
   align-items: center;
   justify-content: center;
-  padding: 18px;
+  padding: ${({ $compact }) => ($compact ? "10px" : "18px")};
   background-color: rgba(0, 0, 0, 0.78);
 `;
 
-const Dialog = styled.View`
+const Dialog = styled.View<{ $compact: boolean }>`
   width: 100%;
   max-width: 420px;
   align-items: center;
-  gap: 14px;
-  padding: 18px;
+  gap: ${({ $compact }) => ($compact ? "8px" : "14px")};
+  padding: ${({ $compact }) => ($compact ? "12px" : "18px")};
   border-radius: 14px;
   background-color: ${colors.surface};
 `;
@@ -165,8 +166,12 @@ export function ProfilePhotoCropModal({
   onCancel,
   onConfirm,
 }: ProfilePhotoCropModalProps) {
-  const { width: windowWidth } = useWindowDimensions();
-  const viewportSize = Math.max(210, Math.min(300, windowWidth - 76));
+  const { height: windowHeight, width: windowWidth } = useWindowDimensions();
+  const compactHeight = windowHeight < 520;
+  const viewportSize = Math.max(
+    100,
+    Math.min(300, windowWidth - 76, windowHeight - (compactHeight ? 190 : 220)),
+  );
   const [zoom, setZoom] = useState(1);
   const [offset, setOffset] = useState<CropOffset>({ x: 0, y: 0 });
   const [saving, setSaving] = useState(false);
@@ -258,8 +263,8 @@ export function ProfilePhotoCropModal({
       animationType="fade"
       onRequestClose={() => !saving && onCancel()}
     >
-      <Backdrop>
-        <Dialog>
+      <Backdrop $compact={compactHeight}>
+        <Dialog $compact={compactHeight}>
           <Header>
             <HeaderCopy>
               <Title>Crop profile photo</Title>

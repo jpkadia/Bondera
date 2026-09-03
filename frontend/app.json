@@ -3,7 +3,7 @@
     "name": "Bondera",
     "slug": "jp-kadiya",
     "version": "1.0.0",
-    "orientation": "portrait",
+    "orientation": "default",
     "icon": "./assets/brand/app-icon.png",
     "scheme": "bondera",
     "userInterfaceStyle": "light",

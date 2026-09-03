@@ -20,6 +20,7 @@ import {
   ScrollView,
   useWindowDimensions,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { styled } from "styled-components/native";
 
 import { IconButton } from "@/components/IconButton";
@@ -48,17 +49,17 @@ interface AiTurn {
   historyTruncated: boolean;
 }
 
-const Screen = styled.SafeAreaView`
+const Screen = styled(SafeAreaView)`
   flex: 1;
   background-color: ${colors.canvas};
 `;
 
-const Topbar = styled.View`
+const Topbar = styled.View<{ $compact: boolean }>`
   min-height: 68px;
   flex-direction: row;
   align-items: center;
-  gap: 10px;
-  padding: 10px 16px;
+  gap: ${({ $compact }) => ($compact ? 5 : 10)}px;
+  padding: ${({ $compact }) => ($compact ? "8px" : "10px 16px")};
   border-bottom-width: 1px;
   border-bottom-color: ${colors.border};
   background-color: ${colors.surface};
@@ -93,14 +94,14 @@ const Shell = styled(KeyboardAvoidingView)`
   flex: 1;
 `;
 
-const Content = styled.View`
+const Content = styled.View<{ $compact: boolean }>`
   width: 100%;
   max-width: 1040px;
   align-self: center;
   flex: 1;
   flex-direction: row;
-  padding: 16px;
-  gap: 12px;
+  padding: ${({ $compact }) => ($compact ? 10 : 16)}px;
+  gap: ${({ $compact }) => ($compact ? 8 : 12)}px;
 `;
 
 const Sidebar = styled.View<{ $visible: boolean }>`
@@ -335,7 +336,7 @@ const SendButton = styled(Pressable)<{ $enabled: boolean }>`
   background-color: ${({ $enabled }) => ($enabled ? colors.brand : colors.border)};
 `;
 
-const DrawerBackdrop = styled.View`
+const DrawerBackdrop = styled(SafeAreaView)`
   flex: 1;
   flex-direction: row;
   background-color: ${colors.overlay};
@@ -392,7 +393,8 @@ function demoAnswer(question: string): AiTurn {
 
 export default function PrivateAiScreen() {
   const { width } = useWindowDimensions();
-  const wide = width >= 860;
+  const compact = width < 420;
+  const wide = width >= 900;
   const { user, isDemo, refreshCurrentUser } = useAuth();
   const historyScrollRef = useRef<ScrollView>(null);
   const [question, setQuestion] = useState("");
@@ -642,7 +644,7 @@ export default function PrivateAiScreen() {
     <Screen>
 
 
-      <Topbar>
+      <Topbar $compact={compact}>
         <IconButton icon={ArrowLeft} label="Back" onPress={() => router.back()} />
         <IconButton
           icon={wide ? PanelLeft : HistoryIcon}
@@ -650,9 +652,11 @@ export default function PrivateAiScreen() {
           tone="soft"
           onPress={() => (wide ? setDesktopSidebarOpen((prev) => !prev) : setMobileDrawerOpen(true))}
         />
-        <BrandMark>
-          <Bot size={21} color={colors.white} />
-        </BrandMark>
+        {!compact ? (
+          <BrandMark>
+            <Bot size={21} color={colors.white} />
+          </BrandMark>
+        ) : null}
         <TitleBlock>
           <Title>Private AI</Title>
           <Subtitle>{locked ? "Premium only" : "Chat data analyzer"}</Subtitle>
@@ -665,7 +669,7 @@ export default function PrivateAiScreen() {
         />
       </Topbar>
       <Shell behavior={Platform.OS === "ios" ? "padding" : undefined}>
-        <Content>
+        <Content $compact={compact}>
           {wide && desktopSidebarOpen ? (
             <Sidebar $visible={wide && desktopSidebarOpen}>
               <NewChatButton onPress={startNewChat}>

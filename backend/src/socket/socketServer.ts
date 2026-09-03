@@ -186,6 +186,7 @@ const markPendingMessagesDelivered = async (userId: Types.ObjectId): Promise<voi
 const registerSocketHandlers = (socket: AuthenticatedSocket): void => {
   const currentUserId = socket.data.mongoId;
   const currentUserIdString = socket.data.userId;
+  const activeTypingRecipients = new Set<string>();
 
   socket.join(userRoom(currentUserIdString));
   void markPendingMessagesDelivered(currentUserId).catch(() => undefined);
@@ -203,6 +204,10 @@ const registerSocketHandlers = (socket: AuthenticatedSocket): void => {
       });
       const serialized = serializeMessage(message);
 
+      activeTypingRecipients.delete(input.recipientId);
+      socket.to(userRoom(input.recipientId)).volatile.emit("typing:stop", {
+        userId: currentUserIdString
+      });
       emitToUser(input.recipientId, "message:new", serialized);
       socket.to(userRoom(currentUserIdString)).emit("message:new", serialized);
       return { message: serialized };
@@ -389,7 +394,13 @@ const registerSocketHandlers = (socket: AuthenticatedSocket): void => {
     void runSocketAction(ack, async () => {
       const input = typingSchema.parse(payload);
       await assertChatEnabled(currentUserId, input.recipientId);
-      socket.to(userRoom(input.recipientId)).emit(event, {
+      if (!socket.connected) return { recipientId: input.recipientId };
+      if (event === "typing:start") {
+        activeTypingRecipients.add(input.recipientId);
+      } else {
+        activeTypingRecipients.delete(input.recipientId);
+      }
+      socket.to(userRoom(input.recipientId)).volatile.emit(event, {
         userId: currentUserIdString
       });
       return { recipientId: input.recipientId };
@@ -402,6 +413,15 @@ const registerSocketHandlers = (socket: AuthenticatedSocket): void => {
   socket.on("typing:stop", (payload: unknown, ack?: SocketAck) =>
     relayTyping("typing:stop", payload, ack)
   );
+
+  socket.on("disconnect", () => {
+    for (const recipientId of activeTypingRecipients) {
+      emitToUser(recipientId, "typing:stop", {
+        userId: currentUserIdString
+      });
+    }
+    activeTypingRecipients.clear();
+  });
 };
 
 export const initializeSocketServer = async (server: HttpServer): Promise<Server> => {

@@ -10,6 +10,7 @@ import {
 } from "lucide-react-native";
 import { useState } from "react";
 import { ActivityIndicator, Modal, Platform, Pressable } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { styled } from "styled-components/native";
 
 import {
@@ -38,7 +39,7 @@ interface AccountProfileModalProps {
   onNotice(message: string, error?: boolean): void;
 }
 
-const Backdrop = styled.View`
+const Backdrop = styled(SafeAreaView)`
   flex: 1;
   align-items: center;
   justify-content: center;

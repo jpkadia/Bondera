@@ -1,7 +1,8 @@
 import { DateTimePicker } from "@expo/ui/community/datetime-picker";
 import { CalendarDays } from "lucide-react-native";
 import { useState } from "react";
-import { Modal, Platform, Pressable } from "react-native";
+import { Modal, Platform, Pressable, ScrollView, useWindowDimensions } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { styled } from "styled-components/native";
 
 import {
@@ -42,7 +43,7 @@ const CalendarButton = styled(Pressable)`
   justify-content: center;
 `;
 
-const Backdrop = styled.View`
+const Backdrop = styled(SafeAreaView)`
   flex: 1;
   align-items: center;
   justify-content: center;
@@ -50,11 +51,10 @@ const Backdrop = styled.View`
   background-color: ${colors.overlay};
 `;
 
-const Dialog = styled.View`
+const Dialog = styled.View<{ $maxHeight: number }>`
   width: 100%;
   max-width: 420px;
-  gap: 14px;
-  padding: 18px;
+  max-height: ${({ $maxHeight }) => $maxHeight}px;
   border-radius: 12px;
   background-color: ${colors.surface};
 `;
@@ -95,6 +95,7 @@ export function BirthDateField({
   onChangeText,
   onBlur,
 }: BirthDateFieldProps) {
+  const { height } = useWindowDimensions();
   const [focused, setFocused] = useState(false);
   const [calendarOpen, setCalendarOpen] = useState(false);
   const [draftDate, setDraftDate] = useState(defaultBirthDate());
@@ -171,34 +172,40 @@ export function BirthDateField({
           onRequestClose={() => setCalendarOpen(false)}
         >
           <Backdrop>
-            <Dialog>
-              <Title>Choose birthdate</Title>
-              <DateTimePicker
-                accentColor={colors.brand}
-                display="inline"
-                maximumDate={maximumDate}
-                minimumDate={new Date(1900, 0, 1, 12)}
-                mode="date"
-                presentation="inline"
-                value={draftDate}
-                onValueChange={(_event, date) => setDraftDate(date)}
-              />
-              <Actions>
-                <Action onPress={() => setCalendarOpen(false)}>
-                  <ActionText>Cancel</ActionText>
-                </Action>
-                <Action
-                  $primary
-                  onPress={() => {
-                    onChangeText(
-                      formatIsoBirthDate(dateToIsoBirthDate(draftDate)),
-                    );
-                    setCalendarOpen(false);
-                  }}
-                >
-                  <ActionText $primary>Use date</ActionText>
-                </Action>
-              </Actions>
+            <Dialog $maxHeight={Math.max(240, height - 40)}>
+              <ScrollView
+                bounces={false}
+                contentContainerStyle={{ gap: 14, padding: 18 }}
+                showsVerticalScrollIndicator={false}
+              >
+                <Title>Choose birthdate</Title>
+                <DateTimePicker
+                  accentColor={colors.brand}
+                  display="inline"
+                  maximumDate={maximumDate}
+                  minimumDate={new Date(1900, 0, 1, 12)}
+                  mode="date"
+                  presentation="inline"
+                  value={draftDate}
+                  onValueChange={(_event, date) => setDraftDate(date)}
+                />
+                <Actions>
+                  <Action onPress={() => setCalendarOpen(false)}>
+                    <ActionText>Cancel</ActionText>
+                  </Action>
+                  <Action
+                    $primary
+                    onPress={() => {
+                      onChangeText(
+                        formatIsoBirthDate(dateToIsoBirthDate(draftDate)),
+                      );
+                      setCalendarOpen(false);
+                    }}
+                  >
+                    <ActionText $primary>Use date</ActionText>
+                  </Action>
+                </Actions>
+              </ScrollView>
             </Dialog>
           </Backdrop>
         </Modal>

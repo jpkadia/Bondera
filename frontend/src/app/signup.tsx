@@ -17,6 +17,7 @@ import {
   Pressable,
   ScrollView,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { styled } from "styled-components/native";
 
 import { IconButton } from "@/components/IconButton";
@@ -41,7 +42,7 @@ import { colors } from "@/theme";
 
 type FieldName = "fullName" | "username" | "email" | "password" | "confirm" | "otp";
 
-const Screen = styled.SafeAreaView`
+const Screen = styled(SafeAreaView)`
   flex: 1;
   background-color: ${colors.canvas};
 `;
@@ -55,7 +56,7 @@ const Content = styled.View`
   max-width: 460px;
   align-self: center;
   gap: 18px;
-  padding: 24px;
+  padding: 16px;
 `;
 
 const BrandRow = styled.View`

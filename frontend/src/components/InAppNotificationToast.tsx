@@ -2,6 +2,7 @@ import { router } from "expo-router";
 import { CakeSlice, Heart, MessageSquare, X } from "lucide-react-native";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Animated, Platform, Pressable } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { styled } from "styled-components/native";
 
 import { colors } from "@/theme";
@@ -37,7 +38,6 @@ interface InAppNotificationToastProps {
 
 const ToastContainer = styled(Animated.View)`
   position: absolute;
-  top: ${Platform.OS === "ios" ? 50 : 20}px;
   left: 16px;
   right: 16px;
   max-width: 460px;
@@ -95,6 +95,7 @@ export function InAppNotificationToast({
   notification,
   onDismiss,
 }: InAppNotificationToastProps) {
+  const insets = useSafeAreaInsets();
   const [slideAnim] = useState(() => new Animated.Value(-100));
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -159,7 +160,12 @@ export function InAppNotificationToast({
           : "New message");
 
   return (
-    <ToastContainer style={{ transform: [{ translateY: slideAnim }] }}>
+    <ToastContainer
+      style={{
+        top: Math.max(insets.top + 8, Platform.OS === "web" ? 16 : 8),
+        transform: [{ translateY: slideAnim }],
+      }}
+    >
       <ToastCard onPress={handlePress}>
         <IconBadge>
           {notification.type === "account" ? (

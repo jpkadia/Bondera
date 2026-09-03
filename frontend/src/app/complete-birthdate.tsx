@@ -6,7 +6,9 @@ import {
   KeyboardAvoidingView,
   Platform,
   Pressable,
+  ScrollView,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { styled } from "styled-components/native";
 
 import { BirthDateField } from "@/components/BirthDateField";
@@ -16,16 +18,13 @@ import { ApiError } from "@/services/api";
 import { parseBirthDateText } from "@/services/birth-date";
 import { colors } from "@/theme";
 
-const Screen = styled.SafeAreaView`
+const Screen = styled(SafeAreaView)`
   flex: 1;
   background-color: ${colors.canvas};
 `;
 
 const Shell = styled(KeyboardAvoidingView)`
   flex: 1;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
 `;
 
 const Panel = styled.View`
@@ -148,7 +147,16 @@ export default function CompleteBirthDateScreen() {
   return (
     <Screen>
       <Shell behavior={Platform.OS === "ios" ? "padding" : undefined}>
-        <Panel>
+        <ScrollView
+          keyboardShouldPersistTaps="handled"
+          contentContainerStyle={{
+            flexGrow: 1,
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 16,
+          }}
+        >
+          <Panel>
           <BrandRow>
             <BrandSymbol size={48} />
             <BrandCopy>
@@ -214,7 +222,8 @@ export default function CompleteBirthDateScreen() {
               <ButtonText $muted>Sign out</ButtonText>
             </Pressable>
           </Form>
-        </Panel>
+          </Panel>
+        </ScrollView>
       </Shell>
     </Screen>
   );

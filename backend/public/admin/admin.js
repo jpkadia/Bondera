@@ -112,6 +112,17 @@
     return $("<tr>").append($("<td>").attr("colspan", columns).addClass("empty-row").text(text));
   }
 
+  function applyResponsiveTableLabels(body) {
+    var labels = body.closest("table").find("thead th").map(function () {
+      return $(this).text().trim();
+    }).get();
+    body.children("tr").each(function () {
+      $(this).children("td:not([colspan])").each(function (index) {
+        $(this).attr("data-label", labels[index] || "Details");
+      });
+    });
+  }
+
   function renderPagination(containerId, view, pagination) {
     var container = $(containerId).empty();
     var previous = $("<button>").addClass("secondary-button").attr("type", "button").text("Previous");
@@ -175,6 +186,7 @@
         row.append($("<td>").append(action));
         body.append(row);
       });
+      applyResponsiveTableLabels(body);
       renderPagination("#usersPagination", "users", data.pagination);
     });
   }
@@ -249,6 +261,7 @@
         row.append($("<td>").append(actions));
         body.append(row);
       });
+      applyResponsiveTableLabels(body);
       renderPagination("#premiumRequestsPagination", "premiumRequests", data.pagination);
     });
   }
@@ -273,6 +286,7 @@
         row.append($("<td>").text(formatDate(room.lastMessageAt)));
         body.append(row);
       });
+      applyResponsiveTableLabels(body);
       renderPagination("#connectionsPagination", "connections", data.pagination);
     });
   }
@@ -294,6 +308,7 @@
         row.append($("<td>").append(badge(message.cloudinaryDestroyedAt ? "Complete" : "Pending", message.cloudinaryDestroyedAt ? "good" : "danger")));
         body.append(row);
       });
+      applyResponsiveTableLabels(body);
       renderPagination("#deletedPagination", "deleted", data.pagination);
     });
   }
@@ -314,6 +329,7 @@
         row.append($("<td>").text(formatDate(log.createdAt)));
         body.append(row);
       });
+      applyResponsiveTableLabels(body);
       renderPagination("#auditPagination", "audit", data.pagination);
     });
   }
@@ -385,6 +401,7 @@
         body.append(row);
       });
       if (!data.daily.length) body.append(emptyRow(6, "No OpenAI usage found."));
+      applyResponsiveTableLabels(body);
     }).catch(function (error) {
       $("#openAiStatus").text("OpenAI usage could not be loaded.");
       $("#openAiUsageTable").empty().append(emptyRow(6, error.message));
