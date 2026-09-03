@@ -38,6 +38,10 @@ import {
   countUnreadConnections,
   setConnectionUnreadCount,
 } from "@/services/read-state";
+import {
+  getHomeCircleLayout,
+  showsEveryCircleCategory,
+} from "@/services/home-layout";
 import { RealtimeClient } from "@/services/socket";
 
 import { colors } from "@/theme";
@@ -363,11 +367,23 @@ const SmallButtonText = styled.Text<{ $danger?: boolean; $primary?: boolean }>`
 `;
 
 const Empty = styled.View`
-  min-height: 180px;
+  min-height: 120px;
   align-items: center;
   justify-content: center;
   gap: 8px;
-  padding: 28px;
+  padding: 22px;
+`;
+
+const CircleGrid = styled.View`
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 12px;
+`;
+
+const CircleEmpty = styled(Empty)`
+  min-height: 92px;
+  padding: 16px;
 `;
 
 const EmptyText = styled.Text`
@@ -427,7 +443,10 @@ const emptyGroups = (): Record<Category, Connection[]> => ({
 export default function HomeScreen() {
   const { width } = useWindowDimensions();
   const compact = width < 390;
+  const circleLayout = getHomeCircleLayout(width);
   const wide = width >= 900;
+  const tablet = circleLayout === "grid";
+  const showEveryCircleCategory = showsEveryCircleCategory(circleLayout);
   const { user, accessToken, isDemo, logout } = useAuth();
   const [realtime] = useState(() => new RealtimeClient());
   const [groups, setGroups] = useState<Record<Category, Connection[]>>(() => isDemo ? demoCategories : emptyGroups());
@@ -768,16 +787,41 @@ export default function HomeScreen() {
                 ))}</List>
               </Panel>
             ) : null}
-            <Tabs horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
-              {categories.map((category) => {
-                const Icon = categoryIcons[category];
-                return <Tab key={category} $active={activeCategory === category} onPress={() => setActiveCategory(category)}><Icon size={16} color={activeCategory === category ? colors.brand : colors.inkMuted} /><TabText $active={activeCategory === category}>{category}</TabText><Count><CountText>{groups[category].length}</CountText></Count></Tab>;
-              })}
-            </Tabs>
-            <Panel>
-              <PanelHeader><Heading>{activeCategory}</Heading><Subheading>{activeContacts.length} contacts</Subheading></PanelHeader>
-              <List>
-                {activeContacts.map((connection) => (
+            {!showEveryCircleCategory ? (
+              <>
+                <Tabs horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+                  {categories.map((category) => {
+                    const Icon = categoryIcons[category];
+                    return <Tab key={category} $active={activeCategory === category} onPress={() => setActiveCategory(category)}><Icon size={16} color={activeCategory === category ? colors.brand : colors.inkMuted} /><TabText $active={activeCategory === category}>{category}</TabText><Count><CountText>{groups[category].length}</CountText></Count></Tab>;
+                  })}
+                </Tabs>
+                <Panel>
+                  <PanelHeader><Heading>{activeCategory}</Heading><Subheading>{activeContacts.length} contacts</Subheading></PanelHeader>
+                  <List>
+                    {activeContacts.map((connection) => (
+                      <Row key={connection.id}>
+                        <ContactMain accessibilityRole="button" onPress={() => openChat(connection)}>
+                        <Avatar user={connection.otherUser} size={46} />
+                        <RowBody><Name>{displayName(connection.otherUser)}</Name><Meta>@{connection.otherUser.username} · {connection.lastMessageAt ? relativeTime(connection.lastMessageAt) : connection.otherUser.uniqueId}</Meta></RowBody>
+                        {connection.unreadCount ? <UnreadBadge><UnreadText>{connection.unreadCount > 99 ? "99+" : connection.unreadCount}</UnreadText></UnreadBadge> : null}
+                        <ChevronRight size={20} color={colors.inkMuted} />
+                        </ContactMain>
+                        <IconButton icon={MoreVertical} label="Contact actions" onPress={() => setActionTarget(connection)} />
+                      </Row>
+                    ))}
+                    {!activeContacts.length ? <Empty><MessageCircleMore size={28} color={colors.inkMuted} /><EmptyText>No contacts in {activeCategory}</EmptyText></Empty> : null}
+                  </List>
+                </Panel>
+              </>
+            ) : (
+              <CircleGrid>
+                {categories.map((category) => {
+                  const contacts = groups[category];
+                  return (
+                    <Panel key={category} style={{ width: tablet ? "48%" : "100%" }}>
+                      <PanelHeader><Heading>{category}</Heading><Subheading>{contacts.length} contacts</Subheading></PanelHeader>
+                      <List>
+                        {contacts.map((connection) => (
                     <Row key={connection.id}>
                       <ContactMain accessibilityRole="button" onPress={() => openChat(connection)}>
                       <Avatar user={connection.otherUser} size={46} />
@@ -787,10 +831,14 @@ export default function HomeScreen() {
                       </ContactMain>
                       <IconButton icon={MoreVertical} label="Contact actions" onPress={() => setActionTarget(connection)} />
                     </Row>
-                ))}
-                {!activeContacts.length ? <Empty><MessageCircleMore size={28} color={colors.inkMuted} /><EmptyText>No contacts in {activeCategory}</EmptyText></Empty> : null}
-              </List>
-            </Panel>
+                        ))}
+                        {!contacts.length ? <CircleEmpty><MessageCircleMore size={25} color={colors.inkMuted} /><EmptyText>No contacts in {category}</EmptyText></CircleEmpty> : null}
+                      </List>
+                    </Panel>
+                  );
+                })}
+              </CircleGrid>
+            )}
           </Content>
         </Main>
       </ScrollView>

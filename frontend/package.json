@@ -54,7 +54,7 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "lint": "expo lint",
-    "test:unit": "tsc src/services/read-state.ts src/services/ai-conversations.ts src/services/profile-crop.ts src/services/message-actions.ts src/services/birth-date.ts src/services/auth-validation.ts src/services/chat-composer.ts src/services/typing-state.ts --ignoreConfig --outDir node_modules/.cache/bondera-tests --module node16 --target es2022 --moduleResolution node16 --esModuleInterop --skipLibCheck && tsc src/utils/format.ts --ignoreConfig --rootDir src --outDir node_modules/.cache/bondera-tests --module node16 --target es2022 --moduleResolution node16 --esModuleInterop --skipLibCheck && node --test tests/*.test.cjs"
+    "test:unit": "tsc src/services/read-state.ts src/services/ai-conversations.ts src/services/profile-crop.ts src/services/message-actions.ts src/services/birth-date.ts src/services/auth-validation.ts src/services/chat-composer.ts src/services/typing-state.ts src/services/home-layout.ts --ignoreConfig --outDir node_modules/.cache/bondera-tests --module node16 --target es2022 --moduleResolution node16 --esModuleInterop --skipLibCheck && tsc src/utils/format.ts --ignoreConfig --rootDir src --outDir node_modules/.cache/bondera-tests --module node16 --target es2022 --moduleResolution node16 --esModuleInterop --skipLibCheck && node --test tests/*.test.cjs"
   },
   "private": true
 }
