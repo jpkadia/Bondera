@@ -16,6 +16,8 @@ import {
   requestNotificationPermission,
   showDeviceNotification,
 } from "@/services/notification";
+import { useRealtime } from "@/context/RealtimeContext";
+import { useAuth } from "@/context/AuthContext";
 import type { ChatMessage, ReactionNotification } from "@/types/api";
 
 interface NotificationContextValue {
@@ -41,6 +43,8 @@ const NotificationContext = createContext<NotificationContextValue>({
 export const useNotification = () => useContext(NotificationContext);
 
 export function NotificationProvider({ children }: { children: React.ReactNode }) {
+  const { user } = useAuth();
+  const { subscribe } = useRealtime();
   const [currentNotification, setCurrentNotification] =
     useState<InAppNotificationPayload | null>(null);
   const activeConnectionId = useRef<string | null>(null);
@@ -93,35 +97,36 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
     [],
   );
 
+  const isInterfaceVisible = useCallback(
+    () => appIsActive.current && documentIsVisible.current,
+    [],
+  );
+
   const showNotification = useCallback((message: ChatMessage, senderName?: string) => {
     if (isConnectionVisible(message.connectionId)) return false;
 
-    const title = senderName ? `${senderName}` : "New message on Bondera";
+    const title = senderName || message.senderName || "New message on Bondera";
     const body =
       message.text ||
       (message.media?.length
         ? `Sent ${message.media.length} media file(s)`
         : "New message");
 
-    // 1. Device notification (Web Notification / System)
-    showDeviceNotification(title, {
-      body,
-      tag: message.connectionId,
-    });
-
-    // 2. In-App Toast notification
-    setCurrentNotification({
-      type: "message",
-      message,
-      senderName,
-    });
+    if (isInterfaceVisible()) {
+      setCurrentNotification({ type: "message", message, senderName });
+    } else {
+      showDeviceNotification(title, { body, tag: message.connectionId });
+    }
     return true;
-  }, [isConnectionVisible]);
+  }, [isConnectionVisible, isInterfaceVisible]);
 
   const showAccountNotification = useCallback((title: string, body: string) => {
-    showDeviceNotification(title, { body, tag: "account-birthday" });
-    setCurrentNotification({ type: "account", title, body });
-  }, []);
+    if (isInterfaceVisible()) {
+      setCurrentNotification({ type: "account", title, body });
+    } else {
+      showDeviceNotification(title, { body, tag: "account-birthday" });
+    }
+  }, [isInterfaceVisible]);
 
   const showReactionNotification = useCallback(
     (reaction: ReactionNotification) => {
@@ -129,19 +134,43 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
 
       const title = `${reaction.reactorName} reacted to your message`;
       const body = `${reaction.emoji} ${reaction.messagePreview}`;
-      showDeviceNotification(title, {
-        body,
-        tag: `reaction:${reaction.messageId}`,
-      });
-      setCurrentNotification({ type: "reaction", reaction });
+      if (isInterfaceVisible()) {
+        setCurrentNotification({ type: "reaction", reaction });
+      } else {
+        showDeviceNotification(title, {
+          body,
+          tag: `reaction:${reaction.messageId}`,
+        });
+      }
       return true;
     },
-    [isConnectionVisible],
+    [isConnectionVisible, isInterfaceVisible],
   );
 
   const requestPermission = useCallback(async () => {
     return requestNotificationPermission();
   }, []);
+
+  useEffect(
+    () =>
+      subscribe({
+        onAccountBirthday: ({ title, body }) =>
+          showAccountNotification(title, body),
+        onMessage: (message) => {
+          if (message.senderId !== user?.id) showNotification(message);
+        },
+        onReaction: ({ notification }) => {
+          if (notification) showReactionNotification(notification);
+        },
+      }),
+    [
+      showAccountNotification,
+      showNotification,
+      showReactionNotification,
+      subscribe,
+      user?.id,
+    ],
+  );
 
   const value = useMemo(
     () => ({

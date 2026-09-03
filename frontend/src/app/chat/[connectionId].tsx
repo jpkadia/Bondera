@@ -52,12 +52,14 @@ import { TypingIndicator } from "@/components/TypingIndicator";
 import { WhatsAppMediaCard } from "@/components/WhatsAppMediaCard";
 import { useAuth } from "@/context/AuthContext";
 import { useNotification } from "@/context/NotificationContext";
+import { useRealtime } from "@/context/RealtimeContext";
 import { demoMessages } from "@/data/demo";
 import { api } from "@/services/api";
 import {
   clampComposerInputHeight,
   insertTextAtSelection,
 } from "@/services/chat-composer";
+import { getChatSnapshot, setChatSnapshot } from "@/services/chat-cache";
 import {
   canAcknowledgeSeen,
   findFirstUnreadIndex,
@@ -65,7 +67,11 @@ import {
   latestViewableUnreadMessage,
 } from "@/services/read-state";
 import { shouldShowMessageAction } from "@/services/message-actions";
-import { RealtimeClient } from "@/services/socket";
+import {
+  createOptimisticMessage,
+  restoreOwnReaction,
+  toggleOwnReaction,
+} from "@/services/optimistic-chat";
 import {
   REMOTE_TYPING_STALE_TIMEOUT_MS,
   TypingSignalController,
@@ -516,7 +522,8 @@ function mergeMessage(items: ChatMessage[], next: ChatMessage) {
 export default function ChatScreen() {
   const params = useLocalSearchParams<Record<string, string>>();
   const { height, width } = useWindowDimensions();
-  const { user, accessToken, isDemo } = useAuth();
+  const { user, isDemo } = useAuth();
+  const { realtime, subscribe } = useRealtime();
   const isRouteFocused = useIsFocused();
   const {
     clearActiveConnection,
@@ -525,8 +532,8 @@ export default function ChatScreen() {
   const listRef = useRef<FlashListRef<ChatMessage>>(null);
   const inputRef = useRef<NativeTextInput>(null);
   const inputSelection = useRef({ start: 0, end: 0 });
+  const textRef = useRef("");
   const { getMappingKey } = useMappingHelper();
-  const [realtime] = useState(() => new RealtimeClient());
   const localTypingController = useRef<TypingSignalController | null>(null);
   const remoteTypingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const initialScrollDone = useRef(false);
@@ -830,6 +837,23 @@ export default function ChatScreen() {
     }
   }, [isDemo, nextAfterCursor, params.connectionId]);
 
+  const synchronizeAfterReconnect = useCallback(async () => {
+    if (isDemo) return;
+    try {
+      const history = await api.messages(params.connectionId);
+      setResolvedConnection(history.connection);
+      setMessages((current) =>
+        history.messages.reduce(
+          (items, message) => mergeMessage(items, message),
+          current,
+        ),
+      );
+      setNextAfterCursor(history.nextAfterCursor);
+    } catch {
+      // The next automatic reconnect or manual refresh can retry synchronization.
+    }
+  }, [isDemo, params.connectionId]);
+
   // Keep one receipt indicator below the latest outgoing message the recipient saw.
   const lastSeenMessage = useMemo(() => {
     return [...messages].reverse().find(
@@ -846,6 +870,7 @@ export default function ChatScreen() {
   useEffect(() => {
     if (!user) return;
     let active = true;
+    const cached = isDemo ? undefined : getChatSnapshot(params.connectionId);
 
     initialScrollDone.current = false;
     isNearBottom.current = true;
@@ -854,6 +879,16 @@ export default function ChatScreen() {
     seenInFlightMessageId.current = null;
     acknowledgedSeenMessageId.current = null;
     loadingNewerMessages.current = false;
+    if (cached) {
+      queueMicrotask(() => {
+        if (!active) return;
+        setResolvedConnection(cached.connection);
+        setMessages(cached.messages);
+        setFirstUnreadMessageId(cached.firstUnreadMessageId);
+        setNextAfterCursor(cached.nextAfterCursor);
+        setLoadedConnectionId(params.connectionId);
+      });
+    }
 
     void (async () => {
       try {
@@ -874,11 +909,13 @@ export default function ChatScreen() {
         setLoadedConnectionId(params.connectionId);
       } catch (error) {
         if (active) {
-          setResolvedConnection(null);
-          setMessages([]);
-          setFirstUnreadMessageId(null);
-          setNextAfterCursor(null);
-          setNewMessageCount(0);
+          if (!cached) {
+            setResolvedConnection(null);
+            setMessages([]);
+            setFirstUnreadMessageId(null);
+            setNextAfterCursor(null);
+            setNewMessageCount(0);
+          }
           setLoadedConnectionId(params.connectionId);
           setNotice(
             error instanceof Error ? error.message : "Messages could not be loaded.",
@@ -893,15 +930,40 @@ export default function ChatScreen() {
   }, [demoConnection, isDemo, params.connectionId, user]);
 
   useEffect(() => {
-    if (!accessToken || !user || !otherUser.id) return;
+    if (
+      isDemo ||
+      loadedConnectionId !== params.connectionId ||
+      !resolvedConnection
+    ) {
+      return;
+    }
+    setChatSnapshot(params.connectionId, {
+      connection: resolvedConnection,
+      messages,
+      firstUnreadMessageId,
+      nextAfterCursor,
+    });
+  }, [
+    firstUnreadMessageId,
+    isDemo,
+    loadedConnectionId,
+    messages,
+    nextAfterCursor,
+    params.connectionId,
+    resolvedConnection,
+  ]);
+
+  useEffect(() => {
+    if (!user || !otherUser.id || isDemo) return;
     const typingController = new TypingSignalController((active) =>
       realtime.typing(otherUser.id, active),
     );
     localTypingController.current = typingController;
-    realtime.connect(accessToken, {
-      onConnect: () => {
+    const unsubscribe = subscribe({
+      onConnect: ({ reconnected, recovered }) => {
         typingController.reset();
         requestAnimationFrame(() => acknowledgeSeenRef.current());
+        if (reconnected && !recovered) void synchronizeAfterReconnect();
       },
       onDisconnect: () => setRemoteTyping(false),
       onMessage: (message) => {
@@ -958,30 +1020,42 @@ export default function ChatScreen() {
         localTypingController.current = null;
       }
       setRemoteTyping(false);
-      realtime.disconnect();
+      unsubscribe();
     };
   }, [
-    accessToken,
     followNextMessage,
+    isDemo,
     otherUser.id,
     params.connectionId,
     realtime,
     setRemoteTyping,
+    subscribe,
+    synchronizeAfterReconnect,
     updateReceipts,
     user,
   ]);
 
   const updateText = (value: string) => {
+    textRef.current = value;
     setText(value);
     if (!isDemo) localTypingController.current?.update(value);
   };
 
   const insertEmoji = ({ emoji }: EmojiSelection) => {
-    const next = insertTextAtSelection(text, inputSelection.current, emoji, 4000);
+    const current = textRef.current;
+    const next = insertTextAtSelection(
+      current,
+      inputSelection.current,
+      emoji,
+      4000,
+    );
     if (!next) return;
 
     inputSelection.current = next.selection;
     updateText(next.value);
+    requestAnimationFrame(() => {
+      inputRef.current?.setNativeProps({ selection: next.selection });
+    });
   };
 
   const closeEmojiPicker = () => {
@@ -1062,6 +1136,7 @@ export default function ChatScreen() {
           : await api.editMessage(editing.id, body);
         setMessages((items) => mergeMessage(items, result.message));
         setEditing(null);
+        textRef.current = "";
         setText("");
       } catch (error) {
         setNotice(
@@ -1074,9 +1149,20 @@ export default function ChatScreen() {
     }
     const clientMessageId = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
     setSending(true);
+    textRef.current = "";
     setText("");
     const queuedFiles = files;
     setFiles([]);
+    const optimisticMessage = createOptimisticMessage({
+      clientMessageId,
+      connectionId: params.connectionId,
+      senderId: user.id,
+      recipientId: otherUser.id,
+      text: body,
+      files: queuedFiles,
+    });
+    followNextMessage(false);
+    setMessages((items) => mergeMessage(items, optimisticMessage));
     try {
       let message: ChatMessage;
       if (isDemo) {
@@ -1146,8 +1232,16 @@ export default function ChatScreen() {
       followNextMessage(true);
       setMessages((items) => mergeMessage(items, message));
     } catch (error) {
-      setText(body);
-      setFiles(queuedFiles);
+      setMessages((items) =>
+        items.filter((item) => item.clientMessageId !== clientMessageId),
+      );
+      const currentDraft = textRef.current;
+      const restoredDraft = currentDraft
+        ? `${body}${body ? "\n" : ""}${currentDraft}`
+        : body;
+      textRef.current = restoredDraft;
+      setText(restoredDraft);
+      setFiles((current) => [...queuedFiles, ...current].slice(0, MAX_FILES));
       setNotice(
         error instanceof Error ? error.message : "Message could not be sent.",
       );
@@ -1158,36 +1252,46 @@ export default function ChatScreen() {
 
   const react = async (emoji: string) => {
     if (!selected || !user) return;
+    const target = selected;
+    const previousReactions = target.reactions;
+    const optimisticReactions = toggleOwnReaction(
+      previousReactions,
+      user.id,
+      emoji,
+    );
+    setMessages((items) =>
+      items.map((item) =>
+        item.id === target.id ? { ...item, reactions: optimisticReactions } : item,
+      ),
+    );
+    setSelected(null);
     try {
       let reactions: MessageReaction[];
       if (isDemo) {
-        const others = selected.reactions.filter(
-          (reaction) => reaction.userId !== user.id,
-        );
-        const own = selected.reactions.find(
-          (reaction) => reaction.userId === user.id,
-        );
-        reactions =
-          own?.emoji === emoji
-            ? others
-            : [
-                ...others,
-                {
-                  userId: user.id,
-                  emoji,
-                  reactedAt: new Date().toISOString(),
-                },
-              ];
+        reactions = optimisticReactions;
       } else {
-        reactions = (await realtime.react(selected.id, emoji)).reactions;
+        reactions = (await realtime.react(target.id, emoji)).reactions;
       }
       setMessages((items) =>
         items.map((item) =>
-          item.id === selected.id ? { ...item, reactions } : item,
+          item.id === target.id ? { ...item, reactions } : item,
         ),
       );
-      setSelected(null);
     } catch (error) {
+      setMessages((items) =>
+        items.map((item) =>
+          item.id === target.id
+            ? {
+                ...item,
+                reactions: restoreOwnReaction(
+                  item.reactions,
+                  previousReactions,
+                  user.id,
+                ),
+              }
+            : item,
+        ),
+      );
       setNotice(error instanceof Error ? error.message : "Reaction failed.");
     }
   };
@@ -1227,6 +1331,7 @@ export default function ChatScreen() {
       return;
     }
     setEditing(selected);
+    textRef.current = selected.text;
     setText(selected.text);
     setSelected(null);
   };
@@ -1369,7 +1474,7 @@ export default function ChatScreen() {
                               ) : null}
                               <MetaRow>
                                 <Time $mine={mine}>
-                                  {messageTime(item.createdAt)}
+                                  {item.pending ? "Sending..." : messageTime(item.createdAt)}
                                 </Time>
                               </MetaRow>
                             </>
@@ -1466,6 +1571,7 @@ export default function ChatScreen() {
                 label="Cancel edit"
                 onPress={() => {
                   setEditing(null);
+                  textRef.current = "";
                   setText("");
                 }}
               />

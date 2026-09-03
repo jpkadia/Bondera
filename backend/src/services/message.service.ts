@@ -66,7 +66,10 @@ export const createChatMessage = async ({
   media = [],
   clientMessageId,
   delivered
-}: CreateChatMessageInput): Promise<MessageDocument> => {
+}: CreateChatMessageInput): Promise<{
+  message: MessageDocument;
+  created: boolean;
+}> => {
   const normalizedText = text?.trim();
 
   if (!normalizedText && media.length === 0) {
@@ -86,7 +89,7 @@ export const createChatMessage = async ({
     const existing = await MessageModel.findOne({ sender: senderId, clientMessageId });
 
     if (existing) {
-      return existing;
+      return { message: existing, created: false };
     }
   }
 
@@ -118,7 +121,7 @@ export const createChatMessage = async ({
       const existing = await MessageModel.findOne({ sender: senderId, clientMessageId });
 
       if (existing) {
-        return existing;
+        return { message: existing, created: false };
       }
     }
 
@@ -130,5 +133,5 @@ export const createChatMessage = async ({
     { $set: { lastMessageAt: message.createdAt } }
   );
 
-  return message;
+  return { message, created: true };
 };

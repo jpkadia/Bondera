@@ -29,6 +29,7 @@ export class ApiError extends Error {
 
 let activeTokens: AuthTokens | null = null;
 let sessionUpdated: ((session: Session) => void) | null = null;
+let refreshInFlight: Promise<boolean> | null = null;
 
 export function configureApi(
   tokens: AuthTokens | null,
@@ -66,16 +67,24 @@ async function parseResponse<T>(response: Response): Promise<T> {
 
 async function refreshAccessToken(): Promise<boolean> {
   if (!activeTokens?.refreshToken) return false;
-  const response = await fetch(`${API_URL}/auth/refresh`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ refreshToken: activeTokens.refreshToken }),
+  if (refreshInFlight) return refreshInFlight;
+
+  const refreshToken = activeTokens.refreshToken;
+  refreshInFlight = (async () => {
+    const response = await fetch(`${API_URL}/auth/refresh`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ refreshToken }),
+    });
+    if (!response.ok) return false;
+    const data = await parseResponse<Session>(response);
+    activeTokens = data.tokens;
+    sessionUpdated?.(data);
+    return true;
+  })().finally(() => {
+    refreshInFlight = null;
   });
-  if (!response.ok) return false;
-  const data = await parseResponse<Session>(response);
-  activeTokens = data.tokens;
-  sessionUpdated?.(data);
-  return true;
+  return refreshInFlight;
 }
 
 async function request<T>(path: string, init: RequestInit = {}, retry = true): Promise<T> {

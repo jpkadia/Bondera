@@ -25,6 +25,7 @@ import {
 import {
   clearSocketServer,
   emitToUser,
+  isUserActive,
   isUserOnline,
   setSocketServer,
   userRoom
@@ -33,6 +34,9 @@ import {
 interface SocketUserData {
   userId: string;
   mongoId: Types.ObjectId;
+  senderName: string;
+  senderUsername: string;
+  appActive: boolean;
 }
 
 interface SocketAckSuccess {
@@ -68,6 +72,7 @@ const reactionSchema = z
   .strict();
 const seenSchema = z.object({ messageId: objectIdSchema }).strict();
 const typingSchema = z.object({ recipientId: objectIdSchema }).strict();
+const presenceSchema = z.object({ active: z.boolean() }).strict();
 
 let io: Server | undefined;
 let redisPublisher: RedisClientType | undefined;
@@ -195,21 +200,42 @@ const registerSocketHandlers = (socket: AuthenticatedSocket): void => {
     void runSocketAction(ack, async () => {
       const input = sendMessageSchema.parse(payload);
       const recipientId = new Types.ObjectId(input.recipientId);
-      const message = await createChatMessage({
+      const recipientOnline = isUserOnline(input.recipientId);
+      const { message, created } = await createChatMessage({
         senderId: currentUserId,
         recipientId,
         text: input.text,
         clientMessageId: input.clientMessageId,
-        delivered: isUserOnline(input.recipientId)
+        delivered: recipientOnline
       });
       const serialized = serializeMessage(message);
+      const realtimeMessage = {
+        ...serialized,
+        senderName: socket.data.senderName,
+        senderUsername: socket.data.senderUsername
+      };
 
       activeTypingRecipients.delete(input.recipientId);
       socket.to(userRoom(input.recipientId)).volatile.emit("typing:stop", {
         userId: currentUserIdString
       });
-      emitToUser(input.recipientId, "message:new", serialized);
-      socket.to(userRoom(currentUserIdString)).emit("message:new", serialized);
+      if (created) {
+        emitToUser(input.recipientId, "message:new", realtimeMessage);
+        socket.to(userRoom(currentUserIdString)).emit("message:new", realtimeMessage);
+      }
+      if (created && !isUserActive(input.recipientId)) {
+        void sendPushToUser(recipientId, {
+          title: socket.data.senderName,
+          body: input.text.length > 120 ? `${input.text.slice(0, 117)}...` : input.text,
+          channelId: "messages",
+          data: {
+            type: "new_message",
+            connectionId: serialized.connectionId,
+            messageId: serialized.id,
+            url: `/chat/${serialized.connectionId}`
+          }
+        }).catch(() => undefined);
+      }
       return { message: serialized };
     });
   });
@@ -372,17 +398,19 @@ const registerSocketHandlers = (socket: AuthenticatedSocket): void => {
           ...reactionPayload,
           notification
         });
-        void sendPushToUser(otherUserId, {
-          title: `${reactorName} reacted to your message`,
-          body: `${input.emoji} ${messagePreview}`,
-          channelId: "messages",
-          data: {
-            type: "message_reaction",
-            connectionId: notification.connectionId,
-            messageId: notification.messageId,
-            url: `/chat/${notification.connectionId}`
-          }
-        }).catch(() => undefined);
+        if (!isUserActive(otherUserIdString)) {
+          void sendPushToUser(otherUserId, {
+            title: `${reactorName} reacted to your message`,
+            body: `${input.emoji} ${messagePreview}`,
+            channelId: "messages",
+            data: {
+              type: "message_reaction",
+              connectionId: notification.connectionId,
+              messageId: notification.messageId,
+              url: `/chat/${notification.connectionId}`
+            }
+          }).catch(() => undefined);
+        }
       } else {
         emitToUser(otherUserIdString, "message:reaction", reactionPayload);
       }
@@ -414,6 +442,11 @@ const registerSocketHandlers = (socket: AuthenticatedSocket): void => {
     relayTyping("typing:stop", payload, ack)
   );
 
+  socket.on("presence:update", (payload: unknown) => {
+    const result = presenceSchema.safeParse(payload);
+    if (result.success) socket.data.appActive = result.data.active;
+  });
+
   socket.on("disconnect", () => {
     for (const recipientId of activeTypingRecipients) {
       emitToUser(recipientId, "typing:stop", {
@@ -431,7 +464,11 @@ export const initializeSocketServer = async (server: HttpServer): Promise<Server
       credentials: true
     },
     maxHttpBufferSize: 1_000_000,
-    transports: ["websocket", "polling"]
+    transports: ["websocket", "polling"],
+    connectionStateRecovery: {
+      maxDisconnectionDuration: 2 * 60 * 1000,
+      skipMiddlewares: false
+    }
   });
 
   if (env.REDIS_URL) {
@@ -453,7 +490,7 @@ export const initializeSocketServer = async (server: HttpServer): Promise<Server
       const user = await UserModel.findOne({
         _id: payload.sub,
         status: "active"
-      }).select("_id birthDate +authVersion");
+      }).select("_id username fullName birthDate +authVersion");
 
       if (!user || !isAuthTokenCurrent(payload, user.authVersion)) {
         throw new AppError(401, "USER_NOT_AVAILABLE", "The authenticated user is unavailable.");
@@ -469,6 +506,9 @@ export const initializeSocketServer = async (server: HttpServer): Promise<Server
 
       socket.data.userId = user._id.toString();
       socket.data.mongoId = new Types.ObjectId(user._id);
+      socket.data.senderName = user.fullName?.trim() || `@${user.username}`;
+      socket.data.senderUsername = user.username;
+      socket.data.appActive = true;
       next();
     } catch (error) {
       const failure = socketFailure(error);

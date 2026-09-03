@@ -95,6 +95,8 @@ export interface ChatMessage {
   id: string;
   connectionId: string;
   senderId: string;
+  senderName?: string;
+  senderUsername?: string;
   recipientId: string;
   clientMessageId?: string;
   text?: string;

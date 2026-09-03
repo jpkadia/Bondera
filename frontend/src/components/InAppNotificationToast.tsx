@@ -141,7 +141,8 @@ export function InAppNotificationToast({
         ...(notification.type === "message"
           ? {
               userId: notification.message.senderId,
-              username: notification.senderName ?? "user",
+              username: notification.message.senderUsername ?? "user",
+              fullName: notification.message.senderName ?? notification.senderName,
             }
           : {}),
       },
@@ -182,7 +183,7 @@ export function InAppNotificationToast({
               ? notification.title
               : notification.type === "reaction"
                 ? `${notification.reaction.reactorName} reacted to your message`
-                : notification.senderName || "New message"}
+                : notification.senderName || notification.message.senderName || "New message"}
           </Sender>
           <Body>{previewText}</Body>
         </Content>

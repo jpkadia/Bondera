@@ -25,6 +25,14 @@ export const isUserOnline = (userId: string): boolean => {
   return Boolean(room?.size);
 };
 
+export const isUserActive = (userId: string): boolean => {
+  const room = socketServer?.sockets.adapter.rooms.get(userRoom(userId));
+  if (!room) return false;
+  return [...room].some((socketId) =>
+    socketServer?.sockets.sockets.get(socketId)?.data.appActive === true
+  );
+};
+
 export const emitToUser = (userId: string, event: string, payload: unknown): void => {
   socketServer?.to(userRoom(userId)).emit(event, payload);
 };

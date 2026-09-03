@@ -20,7 +20,8 @@ import {
   createChatMessage,
   serializeMessage
 } from "../services/message.service";
-import { emitToUser, isUserOnline } from "../socket/realtime";
+import { sendPushToUser } from "../services/pushNotification.service";
+import { emitToUser, isUserActive, isUserOnline } from "../socket/realtime";
 import type { AuthenticatedRequest } from "../types/http";
 import { AppError } from "../utils/errors";
 import { cleanupResourceType } from "../utils/mediaLifecycle";
@@ -77,20 +78,23 @@ export const listMessages = async (
     );
   }
 
-  const firstUnread = await MessageModel.findOne({
-    connection: connection._id,
-    recipient: currentUser.mongoId,
-    isDeleted: false,
-    receipts: {
-      $elemMatch: {
-        user: currentUser.mongoId,
-        seenAt: null
+  const [firstUnread, [connectionView]] = await Promise.all([
+    MessageModel.findOne({
+      connection: connection._id,
+      recipient: currentUser.mongoId,
+      isDeleted: false,
+      receipts: {
+        $elemMatch: {
+          user: currentUser.mongoId,
+          seenAt: null
+        }
       }
-    }
-  })
-    .select("_id createdAt")
-    .sort({ createdAt: 1, _id: 1 })
-    .lean();
+    })
+      .select("_id createdAt")
+      .sort({ createdAt: 1, _id: 1 })
+      .lean(),
+    buildConnectionViews([connection], currentUser.mongoId)
+  ]);
 
   let ordered;
   let nextCursor: string | null = null;
@@ -150,11 +154,6 @@ export const listMessages = async (
         ? ordered[0].createdAt.toISOString()
         : null;
   }
-
-  const [connectionView] = await buildConnectionViews(
-    [connection],
-    currentUser.mongoId
-  );
 
   if (!connectionView) {
     throw new AppError(
@@ -251,16 +250,20 @@ export const uploadChatMessage = async (
     "auto"
   );
   let message;
+  let messageCreated = false;
+  const recipientOnline = isUserOnline(input.recipientId);
 
   try {
-    message = await createChatMessage({
+    const result = await createChatMessage({
       senderId: currentUser.mongoId,
       recipientId: new Types.ObjectId(input.recipientId),
       text: input.text,
       media: uploaded,
       clientMessageId: input.clientMessageId,
-      delivered: isUserOnline(input.recipientId)
+      delivered: recipientOnline
     });
+    message = result.message;
+    messageCreated = result.created;
   } catch (error) {
     await Promise.allSettled(
       uploaded.map((asset) =>
@@ -282,10 +285,32 @@ export const uploadChatMessage = async (
   }
 
   const serialized = serializeMessage(message);
-  emitToUser(input.recipientId, "message:new", serialized);
-  emitToUser(currentUser.id, "message:new", serialized);
+  const realtimeMessage = {
+    ...serialized,
+    senderName: `@${currentUser.username}`,
+    senderUsername: currentUser.username
+  };
+  if (messageCreated) {
+    emitToUser(input.recipientId, "message:new", realtimeMessage);
+    emitToUser(currentUser.id, "message:new", realtimeMessage);
+  }
+  if (messageCreated && !isUserActive(input.recipientId)) {
+    const mediaLabel = files.length === 1 ? "a media file" : `${files.length} media files`;
+    const pushBody = input.text?.trim() || `Sent ${mediaLabel}`;
+    void sendPushToUser(input.recipientId, {
+      title: `@${currentUser.username}`,
+      body: pushBody.length > 120 ? `${pushBody.slice(0, 117)}...` : pushBody,
+      channelId: "messages",
+      data: {
+        type: "new_message",
+        connectionId: serialized.connectionId,
+        messageId: serialized.id,
+        url: `/chat/${serialized.connectionId}`
+      }
+    }).catch(() => undefined);
+  }
 
-  res.status(201).json({
+  res.status(messageCreated ? 201 : 200).json({
     success: true,
     data: { message: serialized }
   });

@@ -19,7 +19,7 @@ import {
   UsersRound,
   X,
 } from "lucide-react-native";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Modal, Pressable, RefreshControl, ScrollView, useWindowDimensions } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { styled } from "styled-components/native";
@@ -32,6 +32,7 @@ import { IconButton } from "@/components/IconButton";
 import { Notice } from "@/components/Notice";
 import { useAuth } from "@/context/AuthContext";
 import { useNotification } from "@/context/NotificationContext";
+import { useRealtime } from "@/context/RealtimeContext";
 import { demoCategories, demoIncoming, demoOutgoing, demoUncategorized } from "@/data/demo";
 import { api, ApiError } from "@/services/api";
 import {
@@ -42,7 +43,6 @@ import {
   getHomeCircleLayout,
   showsEveryCircleCategory,
 } from "@/services/home-layout";
-import { RealtimeClient } from "@/services/socket";
 
 import { colors } from "@/theme";
 import type { Category, Connection } from "@/types/api";
@@ -447,8 +447,8 @@ export default function HomeScreen() {
   const wide = width >= 900;
   const tablet = circleLayout === "grid";
   const showEveryCircleCategory = showsEveryCircleCategory(circleLayout);
-  const { user, accessToken, isDemo, logout } = useAuth();
-  const [realtime] = useState(() => new RealtimeClient());
+  const { user, isDemo, logout } = useAuth();
+  const { subscribe } = useRealtime();
   const [groups, setGroups] = useState<Record<Category, Connection[]>>(() => isDemo ? demoCategories : emptyGroups());
   const [uncategorized, setUncategorized] = useState<Connection[]>(() => isDemo ? demoUncategorized : []);
   const [incoming, setIncoming] = useState<Connection[]>(() => isDemo ? demoIncoming : []);
@@ -464,7 +464,6 @@ export default function HomeScreen() {
   const [categoryMode, setCategoryMode] = useState<"accept" | "set">("set");
   const [actionTarget, setActionTarget] = useState<Connection | null>(null);
   const [profileOpen, setProfileOpen] = useState(false);
-  const connectionsRef = useRef<Connection[]>([]);
 
   const load = useCallback(async () => {
     if (isDemo) {
@@ -490,45 +489,38 @@ export default function HomeScreen() {
     }, [load]),
   );
 
-  useEffect(() => {
-    connectionsRef.current = [
-      ...groups.Family,
-      ...groups.Friends,
-      ...groups.Professional,
-      ...uncategorized,
-    ];
-  }, [groups, uncategorized]);
-
   const {
     isConnectionVisible,
-    showAccountNotification,
-    showNotification,
-    showReactionNotification,
   } = useNotification();
 
   useEffect(() => {
-    if (!accessToken || !user || isDemo) return;
+    if (!user || isDemo) return;
 
-    realtime.connect(accessToken, {
-      onAccountBirthday: ({ title, body }) => showAccountNotification(title, body),
+    return subscribe({
+      onConnect: ({ reconnected, recovered }) => {
+        if (reconnected && !recovered) void load().catch(() => undefined);
+      },
+      onConnectionsChanged: () => void load().catch(() => undefined),
       onMessage: (message) => {
-        if (message.senderId === user.id) return;
-        const senderConn = connectionsRef.current.find(
-          (c) => c.id === message.connectionId || c.otherUser.id === message.senderId,
-        );
-        const senderLabel = senderConn ? displayName(senderConn.otherUser) : "New message";
+        const incomingMessage = message.senderId !== user.id;
+        const incrementUnread =
+          incomingMessage && !isConnectionVisible(message.connectionId);
 
-        if (isConnectionVisible(message.connectionId)) return;
-
-        const touch = (items: Connection[]) => items.map((connection) =>
-          connection.id === message.connectionId
-            ? {
-                ...connection,
-                unreadCount: connection.unreadCount + 1,
-                lastMessageAt: message.createdAt,
-              }
-            : connection
-        );
+        const touch = (items: Connection[]) => items
+          .map((connection) =>
+            connection.id === message.connectionId
+              ? {
+                  ...connection,
+                  unreadCount: incrementUnread
+                    ? connection.unreadCount + 1
+                    : connection.unreadCount,
+                  lastMessageAt: message.createdAt,
+                }
+              : connection,
+          )
+          .sort((first, second) =>
+            (second.lastMessageAt ?? "").localeCompare(first.lastMessageAt ?? ""),
+          );
 
         setGroups((current) => ({
           Family: touch(current.Family),
@@ -536,11 +528,7 @@ export default function HomeScreen() {
           Professional: touch(current.Professional),
         }));
         setUncategorized((current) => touch(current));
-        showNotification(message, senderLabel);
       },
-      onEdited: () => undefined,
-      onDelivered: () => undefined,
-      onSeen: () => undefined,
       onUnreadCount: ({ connectionId, unreadCount }) => {
         setGroups((current) => ({
           Family: setConnectionUnreadCount(current.Family, connectionId, unreadCount),
@@ -555,22 +543,12 @@ export default function HomeScreen() {
           setConnectionUnreadCount(current, connectionId, unreadCount),
         );
       },
-      onReaction: ({ notification }) => {
-        if (notification) showReactionNotification(notification);
-      },
-      onUnsent: () => undefined,
-      onTyping: () => undefined,
     });
-
-    return () => realtime.disconnect();
   }, [
-    accessToken,
     isConnectionVisible,
     isDemo,
-    realtime,
-    showAccountNotification,
-    showNotification,
-    showReactionNotification,
+    load,
+    subscribe,
     user,
   ]);
 

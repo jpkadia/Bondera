@@ -5,6 +5,7 @@ import {
   buildConnectionPairKey,
   buildConnectionViews
 } from "../services/connection.service";
+import { emitToUser } from "../socket/realtime";
 import type { AuthenticatedRequest } from "../types/http";
 import { AppError } from "../utils/errors";
 import type {
@@ -37,6 +38,18 @@ const isDuplicateKeyError = (error: unknown): boolean => {
     "code" in error &&
     (error as { code?: number }).code === 11000
   );
+};
+
+const emitConnectionChanged = (
+  connection: ConnectionDocument,
+  reason: "requested" | "accepted" | "rejected" | "categorized" | "removed"
+): void => {
+  const payload = {
+    connectionId: connection._id.toString(),
+    reason
+  };
+  emitToUser(connection.requester.toString(), "connections:changed", payload);
+  emitToUser(connection.recipient.toString(), "connections:changed", payload);
 };
 
 const buildSingleConnectionView = async (
@@ -158,6 +171,8 @@ export const sendConnectionRequest = async (
     }
   }
 
+  emitConnectionChanged(connection, "requested");
+
   res.status(statusCode).json({
     success: true,
     message: "Connection request sent.",
@@ -243,6 +258,8 @@ export const acceptConnectionRequest = async (
     );
   }
 
+  emitConnectionChanged(connection, "accepted");
+
   res.status(200).json({
     success: true,
     message: "Connection accepted. Chat unlocks after both users choose a category.",
@@ -279,6 +296,8 @@ export const rejectConnectionRequest = async (
       "Only the recipient can reject an active connection request."
     );
   }
+
+  emitConnectionChanged(connection, "rejected");
 
   res.status(200).json({
     success: true,
@@ -320,6 +339,8 @@ export const setConnectionCategory = async (
   if (!connection) {
     throw new AppError(409, "CONNECTION_STATE_CHANGED", "Connection state changed. Try again.");
   }
+
+  emitConnectionChanged(connection, "categorized");
 
   res.status(200).json({
     success: true,
@@ -363,6 +384,8 @@ export const removeConnection = async (
   if (!connection) {
     throw new AppError(409, "CONNECTION_STATE_CHANGED", "Connection state changed. Try again.");
   }
+
+  emitConnectionChanged(connection, "removed");
 
   res.status(200).json({
     success: true,

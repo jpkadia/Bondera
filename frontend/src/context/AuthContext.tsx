@@ -3,7 +3,8 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState } 
 import { DEMO_MODE } from "@/config";
 import type { GoogleCredential } from "@/components/GoogleAuthButton.types";
 import { demoUser } from "@/data/demo";
-import { api, configureApi, type SignupDetails } from "@/services/api";
+import { ApiError, api, configureApi, type SignupDetails } from "@/services/api";
+import { clearChatSnapshots } from "@/services/chat-cache";
 import { clearSession, loadSession, saveSession } from "@/services/sessionStorage";
 import {
   getRegisteredPushToken,
@@ -58,15 +59,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (!mounted) return;
       if (stored) {
         configureApi(stored.tokens, applySession);
+        setSession(stored);
+        setIsBootstrapping(false);
         try {
           const fresh = await api.refresh(stored.tokens.refreshToken);
           if (mounted) applySession(fresh);
-        } catch {
-          await clearSession();
-          configureApi(null);
+        } catch (error) {
+          if (error instanceof ApiError && [401, 403].includes(error.status)) {
+            await clearSession();
+            clearChatSnapshots();
+            configureApi(null);
+            if (mounted) setSession(null);
+          }
         }
       }
-      if (mounted) setIsBootstrapping(false);
+      if (mounted && !stored) setIsBootstrapping(false);
     })();
     return () => { mounted = false; };
   }, [applySession]);
@@ -187,6 +194,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
     setSession(null);
     setIsDemo(false);
+    clearChatSnapshots();
     configureApi(null);
     await clearSession();
   }, [isDemo]);

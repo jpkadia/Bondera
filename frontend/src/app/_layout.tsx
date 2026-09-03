@@ -9,6 +9,7 @@ import { ThemeProvider } from "styled-components/native";
 
 import { AuthProvider, useAuth } from "@/context/AuthContext";
 import { NotificationProvider } from "@/context/NotificationContext";
+import { RealtimeProvider } from "@/context/RealtimeContext";
 import { subscribeToNotificationResponses } from "@/services/push-registration";
 import { theme } from "@/theme";
 
@@ -17,10 +18,12 @@ export default function RootLayout() {
     <SafeAreaProvider initialMetrics={initialWindowMetrics}>
       <ThemeProvider theme={theme}>
         <AuthProvider>
-          <NotificationProvider>
-            <StatusBar style="dark" />
-            <RootNavigator />
-          </NotificationProvider>
+          <RealtimeProvider>
+            <NotificationProvider>
+              <StatusBar style="dark" />
+              <RootNavigator />
+            </NotificationProvider>
+          </RealtimeProvider>
         </AuthProvider>
       </ThemeProvider>
     </SafeAreaProvider>

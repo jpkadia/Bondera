@@ -128,13 +128,14 @@ const processBirthdayUser = async (
       });
       if (existing) continue;
 
-      const message = await createChatMessage({
+      const { message, created } = await createChatMessage({
         senderId: new Types.ObjectId(senderId),
         recipientId: new Types.ObjectId(birthdayUser._id),
         text: BIRTHDAY_MESSAGE,
         clientMessageId,
         delivered: isUserOnline(birthdayUser._id.toString())
       });
+      if (!created) continue;
       const serialized = serializeMessage(message);
       emitToUser(birthdayUser._id.toString(), "message:new", serialized);
       emitToUser(senderId.toString(), "message:new", serialized);
