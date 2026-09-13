@@ -20,6 +20,7 @@ import {
 import {
   ArrowLeft,
   ChevronDown,
+  Clock3,
   Edit3,
   ImagePlus,
   MoreVertical,
@@ -154,7 +155,9 @@ const Messages = styled.View`
   background-color: ${colors.canvas};
 `;
 
-const NewMessagesButton = styled(Pressable)`
+const NewMessagesButton = styled(Pressable).attrs({
+  style: { boxShadow: "0px 3px 6px rgba(0, 0, 0, 0.14)" },
+})`
   position: absolute;
   right: 16px;
   bottom: 14px;
@@ -169,10 +172,6 @@ const NewMessagesButton = styled(Pressable)`
   border-color: ${colors.border};
   border-radius: 20px;
   background-color: ${colors.surface};
-  shadow-color: #000;
-  shadow-offset: 0px 3px;
-  shadow-opacity: 0.14;
-  shadow-radius: 6px;
   elevation: 5;
 `;
 
@@ -209,7 +208,9 @@ const Bubble = styled(Pressable)<{ $mine: boolean; $deleted: boolean }>`
   opacity: ${({ $deleted }) => ($deleted ? 0.78 : 1)};
 `;
 
-const MessageActionTrigger = styled(Pressable)<{ $mine: boolean }>`
+const MessageActionTrigger = styled(Pressable).attrs({
+  style: { boxShadow: "0px 1px 2px rgba(0, 0, 0, 0.12)" },
+})<{ $mine: boolean }>`
   position: absolute;
   top: 4px;
   right: 4px;
@@ -221,10 +222,6 @@ const MessageActionTrigger = styled(Pressable)<{ $mine: boolean }>`
   border-radius: 7px;
   background-color: ${({ $mine }) =>
     $mine ? "rgba(0, 0, 0, 0.2)" : colors.surfaceMuted};
-  shadow-color: #000;
-  shadow-offset: 0px 1px;
-  shadow-opacity: 0.12;
-  shadow-radius: 2px;
 `;
 
 const MessageText = styled.Text<{ $mine: boolean; $deleted?: boolean }>`
@@ -549,6 +546,7 @@ export default function ChatScreen() {
     null,
   );
   const [text, setText] = useState("");
+  const [composerSelection, setComposerSelection] = useState({ start: 0, end: 0 });
   const [inputHeight, setInputHeight] = useState(MIN_COMPOSER_INPUT_HEIGHT);
   const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
   const [files, setFiles] = useState<SelectedFile[]>([]);
@@ -1052,6 +1050,7 @@ export default function ChatScreen() {
     if (!next) return;
 
     inputSelection.current = next.selection;
+    setComposerSelection(next.selection);
     updateText(next.value);
     requestAnimationFrame(() => {
       inputRef.current?.setNativeProps({ selection: next.selection });
@@ -1138,6 +1137,8 @@ export default function ChatScreen() {
         setEditing(null);
         textRef.current = "";
         setText("");
+        inputSelection.current = { start: 0, end: 0 };
+        setComposerSelection({ start: 0, end: 0 });
       } catch (error) {
         setNotice(
           error instanceof Error ? error.message : "Message could not be edited.",
@@ -1148,9 +1149,10 @@ export default function ChatScreen() {
       return;
     }
     const clientMessageId = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-    setSending(true);
     textRef.current = "";
     setText("");
+    inputSelection.current = { start: 0, end: 0 };
+    setComposerSelection({ start: 0, end: 0 });
     const queuedFiles = files;
     setFiles([]);
     const optimisticMessage = createOptimisticMessage({
@@ -1241,12 +1243,16 @@ export default function ChatScreen() {
         : body;
       textRef.current = restoredDraft;
       setText(restoredDraft);
+      const restoredSelection = {
+        start: restoredDraft.length,
+        end: restoredDraft.length,
+      };
+      inputSelection.current = restoredSelection;
+      setComposerSelection(restoredSelection);
       setFiles((current) => [...queuedFiles, ...current].slice(0, MAX_FILES));
       setNotice(
         error instanceof Error ? error.message : "Message could not be sent.",
       );
-    } finally {
-      setSending(false);
     }
   };
 
@@ -1333,6 +1339,12 @@ export default function ChatScreen() {
     setEditing(selected);
     textRef.current = selected.text;
     setText(selected.text);
+    const editSelection = {
+      start: selected.text.length,
+      end: selected.text.length,
+    };
+    inputSelection.current = editSelection;
+    setComposerSelection(editSelection);
     setSelected(null);
   };
 
@@ -1474,8 +1486,15 @@ export default function ChatScreen() {
                               ) : null}
                               <MetaRow>
                                 <Time $mine={mine}>
-                                  {item.pending ? "Sending..." : messageTime(item.createdAt)}
+                                  {messageTime(item.createdAt)}
                                 </Time>
+                                {item.pending ? (
+                                  <Clock3
+                                    accessibilityLabel="Pending delivery"
+                                    size={9}
+                                    color="rgba(255, 255, 255, 0.72)"
+                                  />
+                                ) : null}
                               </MetaRow>
                             </>
                           )}
@@ -1573,6 +1592,8 @@ export default function ChatScreen() {
                   setEditing(null);
                   textRef.current = "";
                   setText("");
+                  inputSelection.current = { start: 0, end: 0 };
+                  setComposerSelection({ start: 0, end: 0 });
                 }}
               />
             </FileChip>
@@ -1611,7 +1632,9 @@ export default function ChatScreen() {
               }}
               onSelectionChange={({ nativeEvent }) => {
                 inputSelection.current = nativeEvent.selection;
+                setComposerSelection(nativeEvent.selection);
               }}
+              selection={composerSelection}
               scrollEnabled={inputHeight >= MAX_COMPOSER_INPUT_HEIGHT}
               style={{ height: inputHeight }}
               textAlignVertical="top"

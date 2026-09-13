@@ -1,4 +1,4 @@
-import { createElement, useEffect, useRef } from "react";
+import { createElement, useEffect, useId, useRef } from "react";
 import { ActivityIndicator, View } from "react-native";
 
 import { GOOGLE_WEB_CLIENT_ID } from "@/config";
@@ -7,6 +7,7 @@ import type { GoogleAuthButtonProps } from "./GoogleAuthButton.types";
 
 interface GoogleCredentialResponse {
   credential?: string;
+  state?: string;
 }
 
 interface GoogleIdentityServices {
@@ -29,6 +30,7 @@ interface GoogleIdentityServices {
           shape: "rectangular";
           logo_alignment: "left";
           width: number;
+          state: string;
         },
       ): void;
       cancel(): void;
@@ -43,6 +45,25 @@ declare global {
 }
 
 let googleScriptPromise: Promise<void> | null = null;
+let googleIdentityInitialized = false;
+const credentialHandlers = new Map<
+  string,
+  (response: GoogleCredentialResponse) => void
+>();
+
+function initializeGoogleIdentityServices(google: GoogleIdentityServices): void {
+  if (googleIdentityInitialized) return;
+  google.accounts.id.initialize({
+    client_id: GOOGLE_WEB_CLIENT_ID,
+    callback: (response) => {
+      if (response.state) credentialHandlers.get(response.state)?.(response);
+    },
+    auto_select: false,
+    cancel_on_tap_outside: true,
+    ux_mode: "popup",
+  });
+  googleIdentityInitialized = true;
+}
 
 function loadGoogleIdentityServices(): Promise<void> {
   if (window.google?.accounts.id) return Promise.resolve();
@@ -84,34 +105,38 @@ export function GoogleAuthButton({
   onError,
 }: GoogleAuthButtonProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
+  const callbacksRef = useRef({ onCredential, onError });
+  const buttonId = useId();
+
+  useEffect(() => {
+    callbacksRef.current = { onCredential, onError };
+  }, [onCredential, onError]);
 
   useEffect(() => {
     let active = true;
 
     if (!GOOGLE_WEB_CLIENT_ID) {
-      onError("Google Sign-In is not configured for Web yet.");
+      callbacksRef.current.onError("Google Sign-In is not configured for Web yet.");
       return;
     }
+
+    credentialHandlers.set(buttonId, (response) => {
+      if (!response.credential) {
+        callbacksRef.current.onError(
+          "Google did not return a valid sign-in credential.",
+        );
+        return;
+      }
+      void callbacksRef.current.onCredential({ idToken: response.credential });
+    });
 
     const render = () => {
       const host = hostRef.current;
       const google = window.google;
       if (!active || !host || !google) return;
 
+      initializeGoogleIdentityServices(google);
       host.replaceChildren();
-      google.accounts.id.initialize({
-        client_id: GOOGLE_WEB_CLIENT_ID,
-        callback: (response) => {
-          if (!response.credential) {
-            onError("Google did not return a valid sign-in credential.");
-            return;
-          }
-          void onCredential({ idToken: response.credential });
-        },
-        auto_select: false,
-        cancel_on_tap_outside: true,
-        ux_mode: "popup",
-      });
       google.accounts.id.renderButton(host, {
         type: "standard",
         theme: "outline",
@@ -120,12 +145,13 @@ export function GoogleAuthButton({
         shape: "rectangular",
         logo_alignment: "left",
         width: Math.min(Math.max(host.clientWidth, 240), 400),
+        state: buttonId,
       });
     };
 
     void loadGoogleIdentityServices().then(render).catch(() => {
       if (active) {
-        onError(
+        callbacksRef.current.onError(
           "Google Sign-In could not be loaded. Check your connection and try again.",
         );
       }
@@ -134,9 +160,10 @@ export function GoogleAuthButton({
 
     return () => {
       active = false;
+      credentialHandlers.delete(buttonId);
       window.removeEventListener("resize", render);
     };
-  }, [onCredential, onError]);
+  }, [buttonId]);
 
   return (
     <View

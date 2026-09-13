@@ -42,6 +42,7 @@ import {
 import {
   getHomeCircleLayout,
   showsEveryCircleCategory,
+  usesCircleCategoryCards,
 } from "@/services/home-layout";
 
 import { colors } from "@/theme";
@@ -349,6 +350,28 @@ const RowActions = styled.View`
   gap: 4px;
 `;
 
+const RequestRow = styled.View<{ $compact: boolean }>`
+  min-height: 74px;
+  flex-direction: ${({ $compact }) => ($compact ? "column" : "row")};
+  align-items: ${({ $compact }) => ($compact ? "stretch" : "center")};
+  gap: ${({ $compact }) => ($compact ? 8 : 12)}px;
+  padding: 10px 0;
+  border-bottom-width: 1px;
+  border-bottom-color: ${colors.surfaceMuted};
+`;
+
+const RequestIdentity = styled.View`
+  flex: 1;
+  min-width: 0;
+  flex-direction: row;
+  align-items: center;
+  gap: 12px;
+`;
+
+const RequestActions = styled(RowActions)<{ $compact: boolean }>`
+  align-self: ${({ $compact }) => ($compact ? "flex-end" : "center")};
+`;
+
 const SmallButton = styled(Pressable)<{ $danger?: boolean; $primary?: boolean }>`
   min-height: 36px;
   padding: 7px 10px;
@@ -379,6 +402,34 @@ const CircleGrid = styled.View`
   flex-wrap: wrap;
   align-items: flex-start;
   gap: 12px;
+`;
+
+const CategoryCardGrid = styled.View`
+  width: 100%;
+  flex-direction: row;
+  gap: 8px;
+`;
+
+const CategoryCard = styled(Pressable)<{ $active: boolean }>`
+  flex: 1;
+  min-width: 0;
+  min-height: 92px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 10px 4px;
+  border-width: 1px;
+  border-color: ${({ $active }) => ($active ? colors.brand : colors.border)};
+  border-radius: 10px;
+  background-color: ${({ $active }) =>
+    $active ? colors.brandSoft : colors.surface};
+`;
+
+const CategoryCardText = styled.Text<{ $active: boolean }>`
+  color: ${({ $active }) => ($active ? colors.brandDark : colors.ink)};
+  font-size: 12px;
+  font-weight: 800;
+  text-align: center;
 `;
 
 const CircleEmpty = styled(Empty)`
@@ -447,6 +498,7 @@ export default function HomeScreen() {
   const wide = width >= 900;
   const tablet = circleLayout === "grid";
   const showEveryCircleCategory = showsEveryCircleCategory(circleLayout);
+  const showCircleCategoryCards = usesCircleCategoryCards(circleLayout);
   const { user, isDemo, logout } = useAuth();
   const { subscribe } = useRealtime();
   const [groups, setGroups] = useState<Record<Category, Connection[]>>(() => isDemo ? demoCategories : emptyGroups());
@@ -725,28 +777,58 @@ export default function HomeScreen() {
               </SearchBox>
             </PanelPad></Panel>
             <Panel>
-              <PanelHeader><Heading>Requests</Heading><Count><CountText>{incoming.length + outgoing.length}</CountText></Count></PanelHeader>
+              <PanelHeader>
+                <Heading>Incoming requests</Heading>
+                <Count><CountText>{incoming.length}</CountText></Count>
+              </PanelHeader>
               <List>
                 {incoming.map((connection) => (
-                  <Row key={connection.id}>
-                    <Avatar user={connection.otherUser} size={40} />
-                    <RowBody><Name>{displayName(connection.otherUser)}</Name><Meta>Incoming · {relativeTime(connection.requestedAt)}</Meta></RowBody>
-                    <RowActions>
-                      <SmallButton $primary onPress={() => openCategory(connection, "accept")}><SmallButtonText $primary>Accept</SmallButtonText></SmallButton>
+                  <RequestRow key={connection.id} $compact={showCircleCategoryCards}>
+                    <RequestIdentity>
+                      <Avatar user={connection.otherUser} size={40} />
+                      <RowBody>
+                        <Name>{displayName(connection.otherUser)}</Name>
+                        <Meta>Wants to connect · {relativeTime(connection.requestedAt)}</Meta>
+                      </RowBody>
+                    </RequestIdentity>
+                    <RequestActions $compact={showCircleCategoryCards}>
+                      <SmallButton $primary onPress={() => openCategory(connection, "accept")}>
+                        <SmallButtonText $primary>Accept</SmallButtonText>
+                      </SmallButton>
                       <IconButton icon={X} label="Reject request" tone="danger" onPress={() => reject(connection)} />
-                    </RowActions>
-                  </Row>
+                    </RequestActions>
+                  </RequestRow>
                 ))}
-                {outgoing.map((connection) => (
-                  <Row key={connection.id}>
-                    <Avatar user={connection.otherUser} size={40} />
-                    <RowBody><Name>{displayName(connection.otherUser)}</Name><Meta>Awaiting response · {relativeTime(connection.requestedAt)}</Meta></RowBody>
-                    <Check size={18} color={colors.inkMuted} />
-                  </Row>
-                ))}
-                {!incoming.length && !outgoing.length ? <Empty><UsersRound size={26} color={colors.inkMuted} /><EmptyText>No pending requests</EmptyText></Empty> : null}
+                {!incoming.length ? (
+                  <Empty>
+                    <UsersRound size={26} color={colors.inkMuted} />
+                    <EmptyText>No incoming requests</EmptyText>
+                  </Empty>
+                ) : null}
               </List>
             </Panel>
+            {outgoing.length ? (
+              <Panel>
+                <PanelHeader>
+                  <Heading>Sent requests</Heading>
+                  <Count><CountText>{outgoing.length}</CountText></Count>
+                </PanelHeader>
+                <List>
+                  {outgoing.map((connection) => (
+                    <RequestRow key={connection.id} $compact={false}>
+                      <RequestIdentity>
+                        <Avatar user={connection.otherUser} size={40} />
+                        <RowBody>
+                          <Name>{displayName(connection.otherUser)}</Name>
+                          <Meta>Awaiting response · {relativeTime(connection.requestedAt)}</Meta>
+                        </RowBody>
+                      </RequestIdentity>
+                      <Check size={18} color={colors.inkMuted} />
+                    </RequestRow>
+                  ))}
+                </List>
+              </Panel>
+            ) : null}
           </Side>
           <Content>
             <SectionHeading>
@@ -767,12 +849,35 @@ export default function HomeScreen() {
             ) : null}
             {!showEveryCircleCategory ? (
               <>
-                <Tabs horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
-                  {categories.map((category) => {
-                    const Icon = categoryIcons[category];
-                    return <Tab key={category} $active={activeCategory === category} onPress={() => setActiveCategory(category)}><Icon size={16} color={activeCategory === category ? colors.brand : colors.inkMuted} /><TabText $active={activeCategory === category}>{category}</TabText><Count><CountText>{groups[category].length}</CountText></Count></Tab>;
-                  })}
-                </Tabs>
+                {showCircleCategoryCards ? (
+                  <CategoryCardGrid accessibilityLabel="Bondera circles">
+                    {categories.map((category) => {
+                      const Icon = categoryIcons[category];
+                      const active = activeCategory === category;
+                      return (
+                        <CategoryCard
+                          key={category}
+                          $active={active}
+                          accessibilityRole="button"
+                          accessibilityLabel={`Open ${category} chats, ${groups[category].length} contacts`}
+                          accessibilityState={{ selected: active }}
+                          onPress={() => setActiveCategory(category)}
+                        >
+                          <Icon size={22} color={active ? colors.brand : colors.inkMuted} />
+                          <CategoryCardText $active={active}>{category}</CategoryCardText>
+                          <Count><CountText>{groups[category].length}</CountText></Count>
+                        </CategoryCard>
+                      );
+                    })}
+                  </CategoryCardGrid>
+                ) : (
+                  <Tabs horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+                    {categories.map((category) => {
+                      const Icon = categoryIcons[category];
+                      return <Tab key={category} $active={activeCategory === category} onPress={() => setActiveCategory(category)}><Icon size={16} color={activeCategory === category ? colors.brand : colors.inkMuted} /><TabText $active={activeCategory === category}>{category}</TabText><Count><CountText>{groups[category].length}</CountText></Count></Tab>;
+                    })}
+                  </Tabs>
+                )}
                 <Panel>
                   <PanelHeader><Heading>{activeCategory}</Heading><Subheading>{activeContacts.length} contacts</Subheading></PanelHeader>
                   <List>

@@ -45,7 +45,9 @@ const ToastContainer = styled(Animated.View)`
   z-index: 99999;
 `;
 
-const ToastCard = styled(Pressable)`
+const ToastCard = styled(Pressable).attrs({
+  style: { boxShadow: "0px 4px 8px rgba(0, 0, 0, 0.25)" },
+})`
   flex-direction: row;
   align-items: center;
   gap: 12px;
@@ -54,10 +56,6 @@ const ToastCard = styled(Pressable)`
   background-color: ${colors.black};
   border-width: 1px;
   border-color: ${colors.border};
-  shadow-color: #000;
-  shadow-offset: 0px 4px;
-  shadow-opacity: 0.25;
-  shadow-radius: 8px;
   elevation: 8;
 `;
 

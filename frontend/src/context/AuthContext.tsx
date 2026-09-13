@@ -4,6 +4,7 @@ import { DEMO_MODE } from "@/config";
 import type { GoogleCredential } from "@/components/GoogleAuthButton.types";
 import { demoUser } from "@/data/demo";
 import { ApiError, api, configureApi, type SignupDetails } from "@/services/api";
+import { clearAiChatSnapshots } from "@/services/ai-chat-cache";
 import { clearChatSnapshots } from "@/services/chat-cache";
 import { clearSession, loadSession, saveSession } from "@/services/sessionStorage";
 import {
@@ -67,6 +68,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         } catch (error) {
           if (error instanceof ApiError && [401, 403].includes(error.status)) {
             await clearSession();
+            clearAiChatSnapshots();
             clearChatSnapshots();
             configureApi(null);
             if (mounted) setSession(null);
@@ -194,6 +196,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
     setSession(null);
     setIsDemo(false);
+    clearAiChatSnapshots();
     clearChatSnapshots();
     configureApi(null);
     await clearSession();

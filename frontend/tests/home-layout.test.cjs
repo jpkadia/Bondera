@@ -4,12 +4,23 @@ const test = require("node:test");
 const {
   getHomeCircleLayout,
   showsEveryCircleCategory,
+  usesCircleCategoryCards,
 } = require("../node_modules/.cache/bondera-tests/services/home-layout.js");
 
-test("mobile and tablet layouts render every circle category", () => {
-  for (const width of [320, 390, 599, 600, 768, 899, 900, 1024, 1199]) {
+test("mobile renders three selectable category cards", () => {
+  for (const width of [320, 390, 599]) {
+    const layout = getHomeCircleLayout(width);
+    assert.equal(layout, "cards", `${width}px`);
+    assert.equal(usesCircleCategoryCards(layout), true, `${width}px`);
+    assert.equal(showsEveryCircleCategory(layout), false, `${width}px`);
+  }
+});
+
+test("tablet and intermediate desktop widths keep all categories visible", () => {
+  for (const width of [600, 768, 899, 900, 1024, 1199]) {
     const layout = getHomeCircleLayout(width);
     assert.equal(showsEveryCircleCategory(layout), true, `${width}px`);
+    assert.equal(usesCircleCategoryCards(layout), false, `${width}px`);
   }
 });
 

@@ -28,6 +28,11 @@ import { Notice } from "@/components/Notice";
 import { useAuth } from "@/context/AuthContext";
 import { api, ApiError } from "@/services/api";
 import {
+  getAiChatSnapshot,
+  isAiChatSnapshotFresh,
+  setAiChatSnapshot,
+} from "@/services/ai-chat-cache";
+import {
   removeAiConversation as removeAiConversationFromList,
   shouldShowAiSuggestions,
   upsertAiConversation,
@@ -396,11 +401,20 @@ export default function PrivateAiScreen() {
   const compact = width < 420;
   const wide = width >= 900;
   const { user, isDemo, refreshCurrentUser } = useAuth();
+  const userId = user?.id;
+  const userIsPremium = user?.isPremium;
+  const cacheKey = isDemo ? "demo" : userId ?? "";
+  const initialSnapshot = cacheKey ? getAiChatSnapshot(cacheKey) : undefined;
   const historyScrollRef = useRef<ScrollView>(null);
   const [question, setQuestion] = useState("");
-  const [conversations, setConversations] = useState<StoredAiConversation[]>([]);
-  const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
-  const [turns, setTurns] = useState<AiTurn[]>([]);
+  const [conversations, setConversations] = useState<StoredAiConversation[]>(
+    initialSnapshot?.conversations ?? [],
+  );
+  const [activeConversationId, setActiveConversationId] = useState<string | null>(
+    initialSnapshot?.activeConversationId ?? null,
+  );
+  const [turns, setTurns] = useState<AiTurn[]>(initialSnapshot?.turns ?? []);
+  const [historyReady, setHistoryReady] = useState(Boolean(initialSnapshot));
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<{ message: string; error?: boolean } | null>(null);
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
@@ -414,8 +428,16 @@ export default function PrivateAiScreen() {
   );
 
   useEffect(() => {
-    if (!user || (!user.isPremium && !isDemo)) return;
+    if (!userId || (!userIsPremium && !isDemo)) return;
     let mounted = true;
+    const cached = cacheKey ? getAiChatSnapshot(cacheKey) : undefined;
+    if (cached) {
+      if (isAiChatSnapshotFresh(cached)) {
+        return () => {
+          mounted = false;
+        };
+      }
+    }
     void (isDemo
       ? loadAiConversations()
       : api.aiConversations().then((data) => data.conversations)
@@ -423,9 +445,18 @@ export default function PrivateAiScreen() {
       .then((items) => {
         if (!mounted) return;
         setConversations(items);
-        if (items[0]) {
-          setActiveConversationId(items[0].id);
-          setTurns(items[0].turns);
+        const selected = items.find(
+          (item) => item.id === cached?.activeConversationId,
+        ) ?? items[0];
+        setActiveConversationId(selected?.id ?? null);
+        setTurns(selected?.turns ?? []);
+        setHistoryReady(true);
+        if (cacheKey) {
+          setAiChatSnapshot(cacheKey, {
+            conversations: items,
+            activeConversationId: selected?.id ?? null,
+            turns: selected?.turns ?? [],
+          });
         }
       })
       .catch((error) => {
@@ -441,7 +472,17 @@ export default function PrivateAiScreen() {
     return () => {
       mounted = false;
     };
-  }, [isDemo, user]);
+  }, [cacheKey, isDemo, userId, userIsPremium]);
+
+  useEffect(() => {
+    if (!cacheKey || !historyReady) return;
+    const cachedAt = getAiChatSnapshot(cacheKey)?.cachedAt ?? Date.now();
+    setAiChatSnapshot(
+      cacheKey,
+      { conversations, activeConversationId, turns },
+      cachedAt,
+    );
+  }, [activeConversationId, cacheKey, conversations, historyReady, turns]);
 
   useEffect(() => {
     if (!user || user.isPremium || isDemo) return;
